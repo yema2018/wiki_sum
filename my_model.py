@@ -20,48 +20,47 @@ def cal_past_att(att_dists):
 
 
 class Encoder(tf.keras.layers.Layer):
-    def __init__(self, layer_node_encoder, d_model, num_heads, dff, input_vocab_size,
-                 node_num, w_emb, rate, para_enc_layer=1):
+    def __init__(self, word_enc_layer, d_model, num_heads, dff, input_vocab_size,
+                 para_num, w_emb, rate, para_enc_layer=1):
         super(Encoder, self).__init__()
 
-        self.node_encoder = SenEncoder(layer_node_encoder, d_model, num_heads, dff, input_vocab_size, w_emb, rate)
+        self.para_encoder = SenEncoder(word_enc_layer, d_model, num_heads, dff, input_vocab_size, w_emb, rate)
         self.para_enc = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(para_enc_layer)]
 
-        self.rank_embedding = tf.keras.layers.Embedding(node_num + 1, d_model, trainable=True)
-        # self.relative_sentence_pos = tf.keras.layers.Embedding(node_num + 1, d_model)
+        self.rank_embedding = tf.keras.layers.Embedding(para_num + 1, d_model, trainable=True)
+        # self.relative_sentence_pos = tf.keras.layers.Embedding(para_num + 1, d_model)
 
-        self.node_num = node_num
+        self.para_num = para_num
         self.d_model = d_model
         self.pl = para_enc_layer
 
     def call(self, inp, training, ranks):
         shape = inp.shape
-        temp = tf.unstack(inp, axis=1)
-        padding_mask_l = [create_padding_mask(i) for i in temp]
-        inp = tf.reshape(inp, shape=[-1, shape[-1]])  # shape == (batch_size * node_num, inp_seq_len)
+
+        inp = tf.reshape(inp, shape=[-1, shape[-1]])  # shape == (batch_size * para_num, inp_seq_len)
+        padding_mask_l = create_padding_mask(inp)
 
         padding_mask = create_padding_mask(inp)
         output_mask = create_output_mask(inp)
         padding_mask_g = create_padding_mask(ranks)
 
-        # (batch_size * node_num, d_model), (batch_size * node_num, inp_seq_len, d_model)
-        node_encoder, con_words = self.node_encoder(inp, training, padding_mask, output_mask)
+        # (batch_size * para_num, d_model), (batch_size * para_num, inp_seq_len, d_model)
+        para_encoder, con_words = self.para_encoder(inp, training, padding_mask, output_mask)
 
-        node_encoder = tf.reshape(node_encoder, [-1, self.node_num, self.d_model])  # (batch_size, node_num, d_model)
-        con_words = tf.reshape(con_words, [-1, self.node_num, shape[-1], self.d_model])    # (batch_size, node_num, inp_seq_len, d_model)
-        con_words = tf.unstack(con_words, axis=1)  # list of (batch_size, inp_seq_len, d_model), len=node_num
+        para_encoder = tf.reshape(para_encoder, [-1, self.para_num, self.d_model])  # (batch_size, para_num, d_model)
 
-        global_info = node_encoder + self.rank_embedding(ranks)
+        con_para = para_encoder + self.rank_embedding(ranks)
 
         for i in range(self.pl):
-            global_info = self.para_enc[i](global_info, training, padding_mask_g)
+            con_para = self.para_enc[i](con_para, training, padding_mask_g)
 
-        return global_info, con_words, padding_mask_l
+        return con_para, con_words, padding_mask_l
 
 
 class DecoderLayer(tf.keras.layers.Layer):
-    def __init__(self, d_model, num_heads, dff, rate):
+    def __init__(self, d_model, num_heads, dff, para_num, rate):
         super(DecoderLayer, self).__init__()
+        self.para_num = para_num
 
         self.mha1 = MultiHeadAttention(d_model, num_heads)
         self.mha2_g = MultiHeadAttention(d_model, num_heads)
@@ -78,30 +77,30 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout3 = tf.keras.layers.Dropout(rate)
 
     def call(self, x, enc_g, enc_l, training, look_ahead_mask, padding_mask_g, padding_mask_l):
-        """
-        :param x: tar_inp
-        :param enc_g: encoder output of global info, shape == (batch_size, node_num, d_model)
-        :param enc_l: encoder output of local info, list of (batch_size, inp_seq_len, d_model), len==node_num
-        :param padding_mask_l: a list of padding masks for inp_seq
-        """
+
         attn1, _ = self.mha1(x, x, x, look_ahead_mask)  # (batch_size, target_seq_len, d_model)
         attn1 = self.dropout1(attn1, training=training)
         out1 = self.layernorm1(attn1 + x)
 
+        out1r = tf.tile(out1, [self.para_num, 1, 1])   # (batch_size * para_num, target_seq_len, d_model)
+
+        shape = tf.shape(attn1)
+
         attn_g, attn_weights_g = self.mha2_g(
-            enc_g, enc_g, out1, padding_mask_g)  # attn_weights_g.shape == (batch_size, tar_seq_len, node_num)
+            enc_g, enc_g, out1, padding_mask_g)  # attn_weights_g.shape == (batch_size, tar_seq_len, para_num)
 
         attn_weights_g1 = tf.expand_dims(attn_weights_g, -1)
 
-        # attn2.shape = (batch_size, tar_seq_len, node_num, d_model)
-        # attn_weights_l.shape==(batch_size, tar_seq_len, node_num, inp_seq_len)
-        temp = [self.mha2_l(i, i, out1, j) for i, j in zip(enc_l, padding_mask_l)]
-        attn2 = tf.stack([i[0] for i in temp], axis=2)
-        attn_weights_l = tf.stack([i[1] for i in temp], axis=2)
+        attn2, attn_weights_l = self.mha2_l(enc_l, enc_l, out1r, padding_mask_l)
+
+        # attn2.shape = (batch_size, tar_seq_len, para_num, d_model)
+        # attn_weights_l.shape==(batch_size, tar_seq_len, para_num, inp_seq_len)
+        attn2 = tf.reshape(attn2, shape=(shape[0], shape[1], -1, shape[-1]))
+        attn_weights_l = tf.reshape(attn_weights_l, shape=(shape[0], shape[1], self.para_num, -1))
         attn2 = tf.reduce_sum(tf.multiply(attn2, attn_weights_g1), axis=-2)  # (batch_size, tar_seq_len, d_model)
         attn2 = self.dropout2(attn2 + attn_g, training=training)
         out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
-        words_weights = tf.multiply(attn_weights_l, attn_weights_g1)  # (batch_size, tar_seq_len, node_num, inp_seq_len)
+        words_weights = tf.multiply(attn_weights_l, attn_weights_g1)  # (batch_size, tar_seq_len, para_num, inp_seq_len)
 
         ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
         ffn_output = self.dropout3(ffn_output, training=training)
@@ -111,7 +110,7 @@ class DecoderLayer(tf.keras.layers.Layer):
 
 
 class Decoder(tf.keras.layers.Layer):
-    def __init__(self, num_layers, d_model, num_heads, dff, target_vocab_size, w_emb, rate):
+    def __init__(self, num_layers, d_model, num_heads, dff, target_vocab_size, w_emb, para_num, rate):
         super(Decoder, self).__init__()
 
         self.d_model = d_model
@@ -120,7 +119,7 @@ class Decoder(tf.keras.layers.Layer):
         self.embedding = w_emb
         self.pos_encoding = positional_encoding(target_vocab_size, d_model)
 
-        self.dec_layers = [DecoderLayer(d_model, num_heads, dff, rate)
+        self.dec_layers = [DecoderLayer(d_model, num_heads, dff, para_num, rate)
                            for _ in range(num_layers)]
         self.dropout = tf.keras.layers.Dropout(rate)
 
@@ -145,12 +144,13 @@ class Decoder(tf.keras.layers.Layer):
                                                    combined_mask, padding_mask_g, padding_mask_l)
 
         # x.shape == (batch_size, target_seq_len, d_model)
-        # words_weights.shape == (batch_size, tar_seq_len, node_num, inp_seq_len)
+        # words_weights.shape == (batch_size, tar_seq_len, para_num, inp_seq_len)
+        # para_weights.shape == (batch_size, tar_seq_len, para_num)
         return x, words_weights, para_weights
 
 
 class MyModel(tf.keras.Model):
-    def __init__(self, num_layers, d_model, num_heads, dff, vocab_size, node_num, rate):
+    def __init__(self, num_layers, d_model, num_heads, dff, vocab_size, para_num, rate):
         super(MyModel, self).__init__()
 
         self.num_layers = num_layers
@@ -158,9 +158,9 @@ class MyModel(tf.keras.Model):
         self.vocab_size = vocab_size
 
         w_emb = tf.keras.layers.Embedding(vocab_size, d_model, trainable=True)
-        self.encoder = Encoder(num_layers, d_model, num_heads, dff, vocab_size, node_num, w_emb, rate)
+        self.encoder = Encoder(num_layers, d_model, num_heads, dff, vocab_size, para_num, w_emb, rate)
 
-        self.decoder = Decoder(1, d_model, num_heads, dff, vocab_size, w_emb, rate)
+        self.decoder = Decoder(1, d_model, num_heads, dff, vocab_size, w_emb, para_num, rate)
 
         self.out_layer = tf.keras.layers.Dense(vocab_size, activation=tf.nn.softmax)
         # self.p_layer = tf.keras.layers.Dense(1, activation=tf.nn.sigmoid)
@@ -168,9 +168,9 @@ class MyModel(tf.keras.Model):
     def cal_final_dist(self, vocab_dists, att_dists, p_gen, encoded_sen_x):
         """
         :param vocab_dists: shape = (batch_size, tar_seq_len, vocab_size)
-        :param att_dists: shape = (batch_size, tar_seq_len, node_num * inp_seq_len)
+        :param att_dists: shape = (batch_size, tar_seq_len, para_num * inp_seq_len)
         :param p_gen: shape = (batch_size, tar_seq_len, 1)
-        :param encoded_sen_x: shape = (batch_size, node_num, inp_seq_len)
+        :param encoded_sen_x: shape = (batch_size, para_num, inp_seq_len)
         :return: final distributions, shape = (batch_size, tar_seq_len, extended_vocab_size)
         """
 
@@ -187,7 +187,7 @@ class MyModel(tf.keras.Model):
         # vocab_dists_extended.shape == (batch_size, tar_seq_len, extend_vsize)
         vocab_dists_extended = tf.concat(axis=-1, values=[vocab_dists, extra_zeros])
 
-        # reshape to (batch_size * tar_seq_len, node_num * inp_seq_len)
+        # reshape to (batch_size * tar_seq_len, para_num * inp_seq_len)
         encoded_sen_x = tf.reshape(encoded_sen_x, shape=[batch_size * tar_seq_len, -1])
         shape = encoded_sen_x.shape
         att_dists = tf.reshape(att_dists, shape=[shape[0], -1])
@@ -216,7 +216,7 @@ class MyModel(tf.keras.Model):
         #
         # shape = att_dists.shape
         # tt = tf.reshape(att_dists, [shape[0], shape[1], -1])
-        # att_dists = tt / tf.reduce_sum(tt, axis=-1, keepdims=True)  # (batch_size, tar_inp_seq, node_num * inp_seq_len)
+        # att_dists = tt / tf.reduce_sum(tt, axis=-1, keepdims=True)  # (batch_size, tar_inp_seq, para_num * inp_seq_len)
         #
         # with tf.device('/cpu:0'):
         #     final_dists = self.cal_final_dist(vocab_dists, att_dists, p_gen, inp_x)
