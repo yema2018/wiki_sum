@@ -21,17 +21,18 @@ def cal_past_att(att_dists):
 
 class Encoder(tf.keras.layers.Layer):
     def __init__(self, layer_node_encoder, d_model, num_heads, dff, input_vocab_size,
-                 node_num, w_emb, rate):
+                 node_num, w_emb, rate, para_enc_layer=1):
         super(Encoder, self).__init__()
 
         self.node_encoder = SenEncoder(layer_node_encoder, d_model, num_heads, dff, input_vocab_size, w_emb, rate)
+        self.para_enc = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(para_enc_layer)]
 
         self.rank_embedding = tf.keras.layers.Embedding(node_num + 1, d_model, trainable=True)
         # self.relative_sentence_pos = tf.keras.layers.Embedding(node_num + 1, d_model)
 
         self.node_num = node_num
-
         self.d_model = d_model
+        self.pl = para_enc_layer
 
     def call(self, inp, training, ranks):
         shape = inp.shape
@@ -41,6 +42,7 @@ class Encoder(tf.keras.layers.Layer):
 
         padding_mask = create_padding_mask(inp)
         output_mask = create_output_mask(inp)
+        padding_mask_g = create_padding_mask(ranks)
 
         # (batch_size * node_num, d_model), (batch_size * node_num, inp_seq_len, d_model)
         node_encoder, con_words = self.node_encoder(inp, training, padding_mask, output_mask)
@@ -50,6 +52,9 @@ class Encoder(tf.keras.layers.Layer):
         con_words = tf.unstack(con_words, axis=1)  # list of (batch_size, inp_seq_len, d_model), len=node_num
 
         global_info = node_encoder + self.rank_embedding(ranks)
+
+        for i in range(self.pl):
+            global_info = self.para_enc[i](global_info, training, padding_mask_g)
 
         return global_info, con_words, padding_mask_l
 
@@ -86,23 +91,23 @@ class DecoderLayer(tf.keras.layers.Layer):
         attn_g, attn_weights_g = self.mha2_g(
             enc_g, enc_g, out1, padding_mask_g)  # attn_weights_g.shape == (batch_size, tar_seq_len, node_num)
 
-        attn_weights_g = tf.expand_dims(attn_weights_g, -1)
+        attn_weights_g1 = tf.expand_dims(attn_weights_g, -1)
 
         # attn2.shape = (batch_size, tar_seq_len, node_num, d_model)
         # attn_weights_l.shape==(batch_size, tar_seq_len, node_num, inp_seq_len)
         temp = [self.mha2_l(i, i, out1, j) for i, j in zip(enc_l, padding_mask_l)]
         attn2 = tf.stack([i[0] for i in temp], axis=2)
         attn_weights_l = tf.stack([i[1] for i in temp], axis=2)
-        attn2 = tf.reduce_sum(tf.multiply(attn2, attn_weights_g), axis=-2)  # (batch_size, tar_seq_len, d_model)
+        attn2 = tf.reduce_sum(tf.multiply(attn2, attn_weights_g1), axis=-2)  # (batch_size, tar_seq_len, d_model)
         attn2 = self.dropout2(attn2 + attn_g, training=training)
         out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
-        words_weights = tf.multiply(attn_weights_l, attn_weights_g)  # (batch_size, tar_seq_len, node_num, inp_seq_len)
+        words_weights = tf.multiply(attn_weights_l, attn_weights_g1)  # (batch_size, tar_seq_len, node_num, inp_seq_len)
 
         ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
         ffn_output = self.dropout3(ffn_output, training=training)
         out3 = self.layernorm3(ffn_output + out2)  # (batch_size, target_seq_len, d_model)
 
-        return out3, words_weights
+        return out3, words_weights, attn_weights_g
 
 
 class Decoder(tf.keras.layers.Layer):
@@ -126,7 +131,8 @@ class Decoder(tf.keras.layers.Layer):
         combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
 
         seq_len = tf.shape(x)[1]
-        att_dists = 0
+        words_weights = 0
+        para_weights = 0
 
         x = self.embedding(x)  # (batch_size, target_seq_len, d_model)
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
@@ -135,14 +141,12 @@ class Decoder(tf.keras.layers.Layer):
         x = self.dropout(x, training=training)
 
         for i in range(self.num_layers):
-            x, words_weights = self.dec_layers[i](x, enc_g, enc_l, training,
+            x, words_weights, para_weights = self.dec_layers[i](x, enc_g, enc_l, training,
                                                    combined_mask, padding_mask_g, padding_mask_l)
 
-            att_dists += words_weights / self.num_layers
-
         # x.shape == (batch_size, target_seq_len, d_model)
-        # att_dists.shape == (batch_size, tar_seq_len, node_num, inp_seq_len)
-        return x, att_dists
+        # words_weights.shape == (batch_size, tar_seq_len, node_num, inp_seq_len)
+        return x, words_weights, para_weights
 
 
 class MyModel(tf.keras.Model):
@@ -156,10 +160,10 @@ class MyModel(tf.keras.Model):
         w_emb = tf.keras.layers.Embedding(vocab_size, d_model, trainable=True)
         self.encoder = Encoder(num_layers, d_model, num_heads, dff, vocab_size, node_num, w_emb, rate)
 
-        self.decoder = Decoder(num_layers, d_model, num_heads, dff, vocab_size, w_emb, rate)
+        self.decoder = Decoder(1, d_model, num_heads, dff, vocab_size, w_emb, rate)
 
         self.out_layer = tf.keras.layers.Dense(vocab_size, activation=tf.nn.softmax)
-        self.p_layer = tf.keras.layers.Dense(1, activation=tf.nn.sigmoid)
+        # self.p_layer = tf.keras.layers.Dense(1, activation=tf.nn.sigmoid)
 
     def cal_final_dist(self, vocab_dists, att_dists, p_gen, encoded_sen_x):
         """
@@ -203,7 +207,8 @@ class MyModel(tf.keras.Model):
     def call(self, inp, training, ranks, tar_inp):
         global_info, con_words, padding_mask_l = self.encoder(inp, training, ranks)
 
-        decoder_out, att_dists = self.decoder(tar_inp, global_info, con_words, training, ranks, padding_mask_l)
+        decoder_out, att_dists, para_weights = self.decoder(tar_inp, global_info,
+                                                            con_words, training, ranks, padding_mask_l)
 
         vocab_dists = self.out_layer(decoder_out)  # (batch_size, target_seq_len, vocab_size)
 
@@ -216,7 +221,7 @@ class MyModel(tf.keras.Model):
         # with tf.device('/cpu:0'):
         #     final_dists = self.cal_final_dist(vocab_dists, att_dists, p_gen, inp_x)
 
-        return vocab_dists
+        return vocab_dists, tf.reduce_sum(para_weights, axis=1)
 
 
 if __name__ == "__main__":

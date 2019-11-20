@@ -1,11 +1,13 @@
-import argparse
+import os
+# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
+import argparse
 from my_model import *
 import tensorflow as tf
 import time
 from data_process import generate_batch
 import sentencepiece as spm
-import os
+
 from nltk.util import ngrams
 import collections
 
@@ -14,7 +16,7 @@ tf.enable_eager_execution()
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
-    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_small', help='checkpoint path')
+    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_111', help='checkpoint path')
 
     parser.add_argument('--batch_size', type=int, default=32, help='batch size')
     parser.add_argument('--epoch', type=int, default=40, help='epoch')
@@ -34,7 +36,7 @@ def parse_args():
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=4000):
+    def __init__(self, d_model, warmup_steps=16000):
         super(CustomSchedule, self).__init__()
 
         self.d_model = d_model
@@ -59,7 +61,7 @@ class RUN:
 
         learning_rate = CustomSchedule(args.d_model)
         self.optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98,
-                                     epsilon=1e-9)
+                                     epsilon=1e-9, clipvalue=0.5, clipnorm=1.0)
         # self.optimizer = tf.keras.optimizers.SGD(0.01)
         self.loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
             from_logits=False, reduction='none')
@@ -93,7 +95,7 @@ class RUN:
         tar_real = tar[:, 1:]
 
         with tf.GradientTape() as tape:
-            pre = self.seq2seq(inp, True, ranks, tar_inp)
+            pre, _ = self.seq2seq(inp, True, ranks, tar_inp)
             # print(tf.argmax(pre, axis=-1))
 
             loss = self.masked_loss_function(tar_real, pre)
@@ -136,6 +138,20 @@ class RUN:
 
             print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
 
+    def generate_pw(self):
+        batch_set = generate_batch(args.batch_size, mode='train')
+        para_weights = np.zeros([1, 25])
+        for (batch, batch_contents) in enumerate(batch_set):
+            inp, tar, ranks = batch_contents
+            tar_inp = tar[:, :-1]
+            _, pw = self.seq2seq(inp, False, ranks, tar_inp)
+            para_weights = np.concatenate((para_weights, pw.numpy()))
+            print(para_weights.shape)
+
+            if len(para_weights) >= 10000:
+                break
+        np.savetxt('pw', para_weights)
+
     def eval_by_beam_search(self):
         batch_set = generate_batch(1, mode='test')
         bng = args.block_n_grams
@@ -166,7 +182,7 @@ class RUN:
                             if tar_inp2[-(bng-1):] == list(gram[:(bng-1)]):
                                 indices.append(gram[-1])
 
-                    pre = self.seq2seq(inp, False, ranks, tar_inp)
+                    pre, _ = self.seq2seq(inp, False, ranks, tar_inp)
 
                     pre = pre[:, -1, :]  # (1, vocab_extend)
 

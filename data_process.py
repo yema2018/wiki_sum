@@ -26,7 +26,7 @@ def generate_batch(batch_size, para_num=25, para_len=64, tgt_len=150, mode='trai
             tgt = tf.keras.preprocessing.sequence.pad_sequences([tgt], maxlen=tgt_len, padding='post')
             srcl.append(np.expand_dims(src, 0))
             tgtl.append(tgt)
-            ranks.append(np.expand_dims(np.array(range(para_num)), 0))
+            ranks.append(np.expand_dims(np.array(range(1, para_num+1)), 0))
 
         srcl = np.concatenate(srcl, axis=0)
         tgtl = np.concatenate(tgtl, axis=0)
