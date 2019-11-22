@@ -25,7 +25,7 @@ class Encoder(tf.keras.layers.Layer):
         super(Encoder, self).__init__()
 
         self.para_encoder = SenEncoder(word_enc_layer, d_model, num_heads, dff, input_vocab_size, w_emb, rate)
-        self.para_enc = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(para_enc_layer)]
+        # self.para_enc = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(para_enc_layer)]
 
         self.rank_embedding = tf.keras.layers.Embedding(para_num + 1, d_model, trainable=True)
         # self.relative_sentence_pos = tf.keras.layers.Embedding(para_num + 1, d_model)
@@ -42,7 +42,7 @@ class Encoder(tf.keras.layers.Layer):
 
         padding_mask = create_padding_mask(inp)
         output_mask = create_output_mask(inp)
-        padding_mask_g = create_padding_mask(ranks)
+        # padding_mask_g = create_padding_mask(ranks)
 
         # (batch_size * para_num, d_model), (batch_size * para_num, inp_seq_len, d_model)
         para_encoder, con_words = self.para_encoder(inp, training, padding_mask, output_mask)
@@ -51,8 +51,8 @@ class Encoder(tf.keras.layers.Layer):
 
         con_para = para_encoder + self.rank_embedding(ranks)
 
-        for i in range(self.pl):
-            con_para = self.para_enc[i](con_para, training, padding_mask_g)
+        # for i in range(self.pl):
+        #     con_para = self.para_enc[i](con_para, training, padding_mask_g)
 
         return con_para, con_words, padding_mask_l
 
@@ -77,18 +77,21 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout3 = tf.keras.layers.Dropout(rate)
 
     def call(self, x, enc_g, enc_l, training, look_ahead_mask, padding_mask_g, padding_mask_l):
+        """
+
+        :param enc_g: shape == (batch_size, para_num, d_model)
+        :param enc_l: shape == (batch_size * para_num, inp_seq_len, d_model)
+
+        """
 
         attn1, _ = self.mha1(x, x, x, look_ahead_mask)  # (batch_size, target_seq_len, d_model)
         attn1 = self.dropout1(attn1, training=training)
         out1 = self.layernorm1(attn1 + x)
-
         out1r = tf.tile(out1, [self.para_num, 1, 1])   # (batch_size * para_num, target_seq_len, d_model)
-
         shape = tf.shape(attn1)
 
         attn_g, attn_weights_g = self.mha2_g(
             enc_g, enc_g, out1, padding_mask_g)  # attn_weights_g.shape == (batch_size, tar_seq_len, para_num)
-
         attn_weights_g1 = tf.expand_dims(attn_weights_g, -1)
 
         attn2, attn_weights_l = self.mha2_l(enc_l, enc_l, out1r, padding_mask_l)
@@ -221,7 +224,7 @@ class MyModel(tf.keras.Model):
         # with tf.device('/cpu:0'):
         #     final_dists = self.cal_final_dist(vocab_dists, att_dists, p_gen, inp_x)
 
-        return vocab_dists, tf.reduce_sum(para_weights, axis=1)
+        return vocab_dists, tf.reduce_sum(para_weights, axis=1), global_info
 
 
 if __name__ == "__main__":

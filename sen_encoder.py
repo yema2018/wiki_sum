@@ -241,7 +241,7 @@ def point_wise_feed_forward_network(d_model, dff):
 
 
 class EncoderLayer(tf.keras.layers.Layer):
-    def __init__(self, d_model, num_heads, dff, rate=0.5):
+    def __init__(self, d_model, num_heads, dff, rate):
         super(EncoderLayer, self).__init__()
 
         self.mha = MultiHeadAttention(d_model, num_heads)
@@ -266,7 +266,7 @@ class EncoderLayer(tf.keras.layers.Layer):
 
 
 class BaseEncoder(tf.keras.layers.Layer):
-    def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size, w_emb, rate=0.5):
+    def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size, w_emb, rate):
         super(BaseEncoder, self).__init__()
 
         self.d_model = d_model
@@ -300,7 +300,7 @@ class SenEncoder(tf.keras.layers.Layer):
     """
     encode the sentences/paragraphs in a news cluster.
     """
-    def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size, w_emb, rate=0.5):
+    def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size, w_emb, rate):
         super(SenEncoder, self).__init__()
 
         self.encoder = BaseEncoder(num_layers, d_model, num_heads, dff, input_vocab_size, w_emb, rate)
