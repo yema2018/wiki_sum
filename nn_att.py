@@ -1,5 +1,4 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 import tensorflow as tf
 import numpy as np
@@ -9,7 +8,7 @@ import time
 tf.enable_eager_execution()
 
 
-def load_data(pb='pre_att/pb', pw='pre_att/pw'):
+def load_data(pb='pre_att/pb1', pw='pre_att/pw1'):
     para_embs = np.genfromtxt(pb).reshape([-1, 25, 256])[1:].astype(np.float32)
     para_w = np.genfromtxt(pw)[1:].astype(np.float32)
     para_w /= np.sum(para_w, axis=1, keepdims=True)
@@ -64,7 +63,7 @@ class PreAtt(object):
         self.train_loss = tf.keras.metrics.Mean(name='train_loss')
         self.val_loss = tf.keras.metrics.Mean(name='val_loss')
 
-        checkpoint_path = './checkpoints2/t1'
+        checkpoint_path = './checkpoints2/t2'
 
         ckpt = tf.train.Checkpoint(model=self.model,
                                    optimizer=self.optimizer)
@@ -147,11 +146,11 @@ class PreAtt(object):
         for (b, bc) in enumerate(val_batch):
             pre = self.model(bc[0], False)
 
-            t = np.concatenate((t, pre.numpy() * 149.0))
+            t = np.concatenate((t, pre.numpy() * 100))
             print(t.shape)
 
         np.savetxt('pre_att/pre', t)
-        np.savetxt('pre_att/att', ty * 149.0)
+        np.savetxt('pre_att/att', ty * 100)
 
     def ex_pred(self, inp):
 
@@ -160,4 +159,5 @@ class PreAtt(object):
 
 
 if __name__ == '__main__':
+    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
     PreAtt().train()

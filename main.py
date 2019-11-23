@@ -19,7 +19,7 @@ def parse_args():
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
     parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_small', help='checkpoint path')
 
-    parser.add_argument('--batch_size', type=int, default=16, help='batch size')
+    parser.add_argument('--batch_size', type=int, default=32, help='batch size')
     parser.add_argument('--epoch', type=int, default=40, help='epoch')
 
     parser.add_argument('--num_layers', type=int, default=1, help='the number of layers in transformer')
@@ -37,7 +37,7 @@ def parse_args():
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=80000):
+    def __init__(self, d_model, warmup_steps=16000):
         super(CustomSchedule, self).__init__()
 
         self.d_model = d_model
@@ -162,8 +162,8 @@ class RUN:
 
             if len(para_weights) >= 50000:
                 break
-        np.savetxt('pre_att/pw', para_weights)
-        np.savetxt('pre_att/pb', para_embs.reshape([-1, 256]))
+        np.savetxt('pre_att/pw1', para_weights)
+        np.savetxt('pre_att/pb1', para_embs.reshape([-1, 256]))
 
 
     def predict_para_att_ratio(self, pb):
@@ -173,13 +173,16 @@ class RUN:
         return pw.numpy().reshape([-1])
 
 
-    def score_diversity(self, tar, pred_att_ratio, real_att, beta=0.2):
+    def score_diversity(self, tar, pred_att_ratio, real_att, beta=1, a=0, limit=0):
         length = int(tar.shape[-1])
         score = 0
-        for i in range(25):
-            score += np.log(np.minimum(real_att[0, i].numpy(), length * pred_att_ratio[i]))
+        # print(real_att.numpy())
+        # print(pred_att_ratio * length)
+        if length >= limit:
+            for i in range(25):
+                score += np.log(np.minimum(real_att[0, i].numpy(), length * pred_att_ratio[i]))
 
-        return beta * score
+        return beta * score / length ** a
 
 
     def eval_by_beam_search(self):
@@ -229,13 +232,18 @@ class RUN:
 
                     val, index = tf.nn.top_k(pre, bsize)
 
+                    # pred_pw = self.predict_para_att_ratio(pb)
+
                     for i in range(bsize):
                         # print(index.numpy()[0, i], out[0])
 
                         q = tf.concat((out[0], tf.expand_dims([index[0, i]], 0)), axis=-1)
-                        pred_pw = self.predict_para_att_ratio(pb)
-                        diver_score = self.score_diversity(q, pred_pw, pw)
-                        p = out[1] + tf.log(val[0, i]) + diver_score
+
+                        # diver_score = self.score_diversity(q, pred_pw, pw)
+
+                        p = out[1] + tf.log(val[0, i])
+
+                        # print( tf.log(val[0, i]), diver_score)
                         temp.append([q, p, pw, pb])
 
                 output = sorted(temp, key=lambda x: x[1])[-bsize:]
@@ -248,8 +256,8 @@ class RUN:
                         # pred_pw = self.predict_para_att_ratio(o[-1])
                         # diver_score = self.score_diversity(o[0], pred_pw, o[-2])
                         lp = ((5 + int(o[0].shape[-1])) ** 0.4) / ((5 + 1) ** 0.4)
-                        # o[1] += diver_score
                         o[1] /= lp
+                        # o[1] += diver_score
 
                         final_out.append(o)
                         update_beam += 1
@@ -265,7 +273,7 @@ class RUN:
             abs1 = [int(i) for i in abs1]
             out_sen = self.sp.decode_ids(abs1)
 
-            with open('./temp/decode_sd_0.2.txt', 'a') as fw:
+            with open('./temp1/train111.txt', 'a') as fw:
                 fw.write(out_sen)
                 fw.write('\n')
 

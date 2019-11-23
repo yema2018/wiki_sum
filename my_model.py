@@ -210,8 +210,15 @@ class MyModel(tf.keras.Model):
     def call(self, inp, training, ranks, tar_inp):
         global_info, con_words, padding_mask_l = self.encoder(inp, training, ranks)
 
+
         decoder_out, att_dists, para_weights = self.decoder(tar_inp, global_info,
                                                             con_words, training, ranks, padding_mask_l)
+
+        pw = None
+        if not training:
+            tar_mask = tf.math.logical_not(tf.math.equal(tar_inp, 0))
+            tar_mask = tf.cast(tar_mask, dtype=para_weights.dtype)
+            pw = tf.reduce_sum(tf.expand_dims(tar_mask, axis=-1) * para_weights, axis=1)
 
         vocab_dists = self.out_layer(decoder_out)  # (batch_size, target_seq_len, vocab_size)
 
@@ -224,7 +231,7 @@ class MyModel(tf.keras.Model):
         # with tf.device('/cpu:0'):
         #     final_dists = self.cal_final_dist(vocab_dists, att_dists, p_gen, inp_x)
 
-        return vocab_dists, tf.reduce_sum(para_weights, axis=1), global_info
+        return vocab_dists, pw, global_info
 
 
 if __name__ == "__main__":
