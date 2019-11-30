@@ -8,7 +8,7 @@ sp = spm.SentencePieceProcessor()
 sp.load('spm9998_3.model')
 
 
-def generate_batch(batch_size, para_num=25, para_len=64, tgt_len=150, mode='train'):
+def generate_batch(batch_size, para_num=25, para_len=64, tgt_len=200, mode='train'):
     l = [i for i in os.listdir('ranked_wiki_b40') if mode in i]
     for i in l:
         print(i)
@@ -21,9 +21,9 @@ def generate_batch(batch_size, para_num=25, para_len=64, tgt_len=150, mode='trai
             if len(src) != para_num:
                 continue
 
-            src = tf.keras.preprocessing.sequence.pad_sequences(src, maxlen=para_len, padding='post')
+            src = tf.keras.preprocessing.sequence.pad_sequences(src, maxlen=para_len, padding='post', truncating='post')
             tgt = d['tgt']
-            tgt = tf.keras.preprocessing.sequence.pad_sequences([tgt], maxlen=tgt_len, padding='post')
+            tgt = tf.keras.preprocessing.sequence.pad_sequences([tgt], maxlen=tgt_len, padding='post', truncating='post')
             srcl.append(np.expand_dims(src, 0))
             tgtl.append(tgt)
             ranks.append(np.expand_dims(np.array(range(1, para_num+1)), 0))

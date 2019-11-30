@@ -8,7 +8,7 @@ import time
 from data_process import generate_batch
 import sentencepiece as spm
 from nn_att import PreAtt
-
+from sklearn.metrics.pairwise import cosine_similarity
 from nltk.util import ngrams
 import collections
 
@@ -17,12 +17,12 @@ tf.enable_eager_execution()
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
-    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_small', help='checkpoint path')
+    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large', help='checkpoint path')
 
-    parser.add_argument('--batch_size', type=int, default=32, help='batch size')
-    parser.add_argument('--epoch', type=int, default=40, help='epoch')
+    parser.add_argument('--batch_size', type=int, default=16, help='batch size')
+    parser.add_argument('--epoch', type=int, default=4, help='epoch')
 
-    parser.add_argument('--num_layers', type=int, default=1, help='the number of layers in transformer')
+    parser.add_argument('--num_layers', type=int, default=5, help='the number of layers in transformer')
     parser.add_argument('--d_model', type=int, default=256, help='the dimension of embedding')
     parser.add_argument('--num_headers', type=int, default=4, help='the number of attention headers')
     parser.add_argument('--dff', type=int, default=1024, help='the number of units in point_wise_feed_forward_network')
@@ -37,7 +37,7 @@ def parse_args():
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=16000):
+    def __init__(self, d_model, warmup_steps=50000):
         super(CustomSchedule, self).__init__()
 
         self.d_model = d_model
@@ -72,15 +72,16 @@ class RUN:
 
         checkpoint_path = args.ckpt_path
 
-        ckpt = tf.train.Checkpoint(model=self.seq2seq,
+        self.ckpt = tf.train.Checkpoint(model=self.seq2seq,
                                       optimizer=self.optimizer)
 
-        self.ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=10)
+        self.ckpt_manager = tf.train.CheckpointManager(self.ckpt, checkpoint_path, max_to_keep=50)
 
         # if a checkpoint exists, restore the latest checkpoint.
         if self.ckpt_manager.latest_checkpoint:
-            ckpt.restore(self.ckpt_manager.latest_checkpoint)
-            print('Latest checkpoint restored!!')
+            path = 'checkpoints/train_large/ckpt-30'
+            self.ckpt.restore(path)
+            print('{} restored!!'.format(path))
 
         self.attpre = PreAtt()
 
@@ -147,7 +148,6 @@ class RUN:
 
             self.saver(epoch, start)
 
-
     def generate_pw(self):
         batch_set = generate_batch(args.batch_size, mode='train')
         para_weights = np.zeros([1, 25])
@@ -155,16 +155,15 @@ class RUN:
         for (batch, batch_contents) in enumerate(batch_set):
             inp, tar, ranks = batch_contents
             tar_inp = tar[:, :-1]
-            _, pw, pb = self.seq2seq(inp, False, ranks, tar_inp)
+            _, pw, pb = self.seq2seq(inp, False, ranks, tar_inp, True)
             para_weights = np.concatenate((para_weights, pw.numpy()))
             para_embs = np.concatenate((para_embs, pb.numpy()))
             print(para_embs.shape)
 
             if len(para_weights) >= 50000:
                 break
-        np.savetxt('pre_att/pw1', para_weights)
-        np.savetxt('pre_att/pb1', para_embs.reshape([-1, 256]))
-
+        np.savetxt('pre_att/pw15', para_weights)
+        np.savetxt('pre_att/pb15', para_embs.reshape([-1, 256]))
 
     def predict_para_att_ratio(self, pb):
 
@@ -172,21 +171,20 @@ class RUN:
 
         return pw.numpy().reshape([-1])
 
-
-    def score_diversity(self, tar, pred_att_ratio, real_att, beta=1, a=0, limit=0):
+    def score_diversity(self, tar, pred_att_ratio, real_att, beta=0):
         length = int(tar.shape[-1])
+        real_att = real_att.numpy()[0, :] / length
+
         score = 0
-        # print(real_att.numpy())
-        # print(pred_att_ratio * length)
-        if length >= limit:
-            for i in range(25):
-                score += np.log(np.minimum(real_att[0, i].numpy(), length * pred_att_ratio[i]))
+        for i in range(25):
+            score += np.log(np.minimum(real_att[i], pred_att_ratio[i]))
 
-        return beta * score / length ** a
+        # con_sim = cosine_similarity(real_att.reshape(1, -1), pred_att_ratio.reshape(1, -1))[0]
 
+        return beta * score
 
     def eval_by_beam_search(self):
-        batch_set = generate_batch(1, mode='test')
+        batch_set = generate_batch(1, mode='test', para_len=120)
         bng = args.block_n_grams
         bnw = args.block_n_words_before
         for (batch, batch_contents) in enumerate(batch_set):
@@ -199,7 +197,7 @@ class RUN:
             final_out = []
             update_beam = 0
 
-            for step in range(200):
+            for step in range(2000):
                 temp = []
 
                 bsize = args.beam_size - update_beam
@@ -215,7 +213,7 @@ class RUN:
                             if tar_inp2[-(bng-1):] == list(gram[:(bng-1)]):
                                 indices.append(gram[-1])
 
-                    pre, pw, pb = self.seq2seq(inp, False, ranks, tar_inp)
+                    pre, pw, pb = self.seq2seq(inp, False, ranks, tar_inp, True)
 
                     pre = pre[:, -1, :]  # (1, vocab_extend)
 
@@ -232,18 +230,11 @@ class RUN:
 
                     val, index = tf.nn.top_k(pre, bsize)
 
-                    # pred_pw = self.predict_para_att_ratio(pb)
-
                     for i in range(bsize):
-                        # print(index.numpy()[0, i], out[0])
-
                         q = tf.concat((out[0], tf.expand_dims([index[0, i]], 0)), axis=-1)
 
-                        # diver_score = self.score_diversity(q, pred_pw, pw)
+                        p = out[1] + np.log(val[0, i])
 
-                        p = out[1] + tf.log(val[0, i])
-
-                        # print( tf.log(val[0, i]), diver_score)
                         temp.append([q, p, pw, pb])
 
                 output = sorted(temp, key=lambda x: x[1])[-bsize:]
@@ -252,15 +243,28 @@ class RUN:
                 for o in output.copy():
 
                     if o[0][0, -1].numpy() == 5:
+                        # print(o[0])
                         output.remove(o)
-                        # pred_pw = self.predict_para_att_ratio(o[-1])
-                        # diver_score = self.score_diversity(o[0], pred_pw, o[-2])
-                        lp = ((5 + int(o[0].shape[-1])) ** 0.4) / ((5 + 1) ** 0.4)
-                        o[1] /= lp
-                        # o[1] += diver_score
+                        pred_pw = self.predict_para_att_ratio(o[-1])
+                        diver_score = self.score_diversity(o[0], pred_pw, o[-2])
+                        # lp = ((5 + int(o[0].shape[-1])) ** 0.7) / ((5 + 1) ** 0.7)
+                        o[1] /= int(o[0].shape[-1])
+                        print(o[1], diver_score)
+                        o[1] += diver_score
 
                         final_out.append(o)
                         update_beam += 1
+
+                        # abs1 = list(o[0].numpy().reshape([-1]).astype(int))
+                        # abs1 = [int(i) for i in abs1]
+                        # out_sen = self.sp.decode_ids(abs1)
+                        # with open('./temp3/compare', 'a') as fw:
+                        #     fw.write(out_sen)
+                        #     fw.write('\t')
+                        #     fw.write('prob {:.4f}'.format(o[1]-diver_score))
+                        #     fw.write('\t')
+                        #     fw.write('diver {:.4f}'.format(diver_score))
+                        #     fw.write('\n')
 
                 if not output:
                     break
@@ -273,9 +277,39 @@ class RUN:
             abs1 = [int(i) for i in abs1]
             out_sen = self.sp.decode_ids(abs1)
 
-            with open('./temp1/train111.txt', 'a') as fw:
+            with open('./temp3/120_b0_post_30', 'a') as fw:
                 fw.write(out_sen)
                 fw.write('\n')
+
+    def valid_step(self, inp, ranks, tar):
+        tar_inp = tar[:, :-1]
+        tar_real = tar[:, 1:]
+
+        pre, _, _ = self.seq2seq(inp, False, ranks, tar_inp)
+
+        loss = self.masked_loss_function(tar_real, pre)
+        self.train_loss(loss)
+
+    def valid(self):
+        path_range = range(6, 20)
+        for path in path_range:
+            self.ckpt.restore('checkpoints/train_large/ckpt-{}'.format(path))
+            # print()
+            start = time.time()
+            self.train_loss.reset_states()
+
+            batch_set = generate_batch(128, mode='valid')
+            for (batch, batch_contents) in enumerate(batch_set):
+                inp, tar, ranks = batch_contents
+
+                _, _ = self.train_step(inp, ranks, tar)
+
+                if batch % 50 == 0:
+                    print('50 cal')
+
+            print('ckpt-{} Loss {:.4f}'.format(path, self.train_loss.result()))
+
+            print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
 
 
 if __name__ == "__main__":

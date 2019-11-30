@@ -21,18 +21,16 @@ def cal_past_att(att_dists):
 
 class Encoder(tf.keras.layers.Layer):
     def __init__(self, word_enc_layer, d_model, num_heads, dff, input_vocab_size,
-                 para_num, w_emb, rate, para_enc_layer=1):
+                 para_num, w_emb, rate):
         super(Encoder, self).__init__()
 
         self.para_encoder = SenEncoder(word_enc_layer, d_model, num_heads, dff, input_vocab_size, w_emb, rate)
-        # self.para_enc = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(para_enc_layer)]
 
         self.rank_embedding = tf.keras.layers.Embedding(para_num + 1, d_model, trainable=True)
         # self.relative_sentence_pos = tf.keras.layers.Embedding(para_num + 1, d_model)
 
         self.para_num = para_num
         self.d_model = d_model
-        self.pl = para_enc_layer
 
     def call(self, inp, training, ranks):
         shape = inp.shape
@@ -42,23 +40,19 @@ class Encoder(tf.keras.layers.Layer):
 
         padding_mask = create_padding_mask(inp)
         output_mask = create_output_mask(inp)
-        # padding_mask_g = create_padding_mask(ranks)
 
         # (batch_size * para_num, d_model), (batch_size * para_num, inp_seq_len, d_model)
         para_encoder, con_words = self.para_encoder(inp, training, padding_mask, output_mask)
 
         para_encoder = tf.reshape(para_encoder, [-1, self.para_num, self.d_model])  # (batch_size, para_num, d_model)
 
-        con_para = para_encoder + self.rank_embedding(ranks)
+        para_encoder = para_encoder + self.rank_embedding(ranks)
 
-        # for i in range(self.pl):
-        #     con_para = self.para_enc[i](con_para, training, padding_mask_g)
-
-        return con_para, con_words, padding_mask_l
+        return para_encoder, con_words, padding_mask_l
 
 
 class DecoderLayer(tf.keras.layers.Layer):
-    def __init__(self, d_model, num_heads, dff, para_num, rate):
+    def __init__(self, d_model, num_heads, dff, para_num, rate, para_enc_layer=2, hisum=False):
         super(DecoderLayer, self).__init__()
         self.para_num = para_num
 
@@ -76,6 +70,11 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.dropout3 = tf.keras.layers.Dropout(rate)
 
+        if hisum:
+            self.para_enc = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(para_enc_layer)]
+            self.pl = para_enc_layer
+        self.hisum = hisum
+
     def call(self, x, enc_g, enc_l, training, look_ahead_mask, padding_mask_g, padding_mask_l):
         """
 
@@ -87,23 +86,34 @@ class DecoderLayer(tf.keras.layers.Layer):
         attn1, _ = self.mha1(x, x, x, look_ahead_mask)  # (batch_size, target_seq_len, d_model)
         attn1 = self.dropout1(attn1, training=training)
         out1 = self.layernorm1(attn1 + x)
-        out1r = tf.tile(out1, [self.para_num, 1, 1])   # (batch_size * para_num, target_seq_len, d_model)
-        shape = tf.shape(attn1)
+
+        if self.hisum:
+            for i in range(self.pl):
+                enc_g = self.para_enc[i](enc_g, training, padding_mask_g)
 
         attn_g, attn_weights_g = self.mha2_g(
             enc_g, enc_g, out1, padding_mask_g)  # attn_weights_g.shape == (batch_size, tar_seq_len, para_num)
-        attn_weights_g1 = tf.expand_dims(attn_weights_g, -1)
 
-        attn2, attn_weights_l = self.mha2_l(enc_l, enc_l, out1r, padding_mask_l)
+        words_weights = None
 
-        # attn2.shape = (batch_size, tar_seq_len, para_num, d_model)
-        # attn_weights_l.shape==(batch_size, tar_seq_len, para_num, inp_seq_len)
-        attn2 = tf.reshape(attn2, shape=(shape[0], shape[1], -1, shape[-1]))
-        attn_weights_l = tf.reshape(attn_weights_l, shape=(shape[0], shape[1], self.para_num, -1))
-        attn2 = tf.reduce_sum(tf.multiply(attn2, attn_weights_g1), axis=-2)  # (batch_size, tar_seq_len, d_model)
-        attn2 = self.dropout2(attn2 + attn_g, training=training)
-        out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
-        words_weights = tf.multiply(attn_weights_l, attn_weights_g1)  # (batch_size, tar_seq_len, para_num, inp_seq_len)
+        if not self.hisum:
+            out1r = tf.tile(out1, [self.para_num, 1, 1])   # (batch_size * para_num, target_seq_len, d_model)
+            shape = tf.shape(attn1)
+
+            attn_weights_g1 = tf.expand_dims(attn_weights_g, -1)
+            attn2, attn_weights_l = self.mha2_l(enc_l, enc_l, out1r, padding_mask_l)
+
+            # attn2.shape = (batch_size, tar_seq_len, para_num, d_model)
+            # attn_weights_l.shape==(batch_size, tar_seq_len, para_num, inp_seq_len)
+            attn2 = tf.reshape(attn2, shape=(shape[0], shape[1], -1, shape[-1]))
+            attn_weights_l = tf.reshape(attn_weights_l, shape=(shape[0], shape[1], self.para_num, -1))
+            attn2 = tf.reduce_sum(tf.multiply(attn2, attn_weights_g1), axis=-2)  # (batch_size, tar_seq_len, d_model)
+            attn2 = self.dropout2(attn2 + attn_g, training=training)
+            out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
+            words_weights = tf.multiply(attn_weights_l, attn_weights_g1)  # (batch_size, tar_seq_len, para_num, inp_seq_len)
+        else:
+            attn_g = self.dropout2(attn_g, training=training)
+            out2 = self.layernorm2(attn_g + out1)  # (batch_size, target_seq_len, d_model)
 
         ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
         ffn_output = self.dropout3(ffn_output, training=training)
@@ -207,7 +217,7 @@ class MyModel(tf.keras.Model):
 
         return final_dists
 
-    def call(self, inp, training, ranks, tar_inp):
+    def call(self, inp, training, ranks, tar_inp, cal_pw=False):
         global_info, con_words, padding_mask_l = self.encoder(inp, training, ranks)
 
 
@@ -215,7 +225,7 @@ class MyModel(tf.keras.Model):
                                                             con_words, training, ranks, padding_mask_l)
 
         pw = None
-        if not training:
+        if cal_pw:
             tar_mask = tf.math.logical_not(tf.math.equal(tar_inp, 0))
             tar_mask = tf.cast(tar_mask, dtype=para_weights.dtype)
             pw = tf.reduce_sum(tf.expand_dims(tar_mask, axis=-1) * para_weights, axis=1)

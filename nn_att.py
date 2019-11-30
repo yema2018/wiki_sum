@@ -8,7 +8,7 @@ import time
 tf.enable_eager_execution()
 
 
-def load_data(pb='pre_att/pb1', pw='pre_att/pw1'):
+def load_data(pb='pre_att/pb15', pw='pre_att/pw15'):
     para_embs = np.genfromtxt(pb).reshape([-1, 25, 256])[1:].astype(np.float32)
     para_w = np.genfromtxt(pw)[1:].astype(np.float32)
     para_w /= np.sum(para_w, axis=1, keepdims=True)
@@ -37,18 +37,24 @@ def generate_batch(trx, tx, tray, ty, batch_size=64, isTrain=True):
 
 
 class PreAttModel(tf.keras.Model):
-    def __init__(self, d_model=256, num_heads=4, dff=1024, rate=0.3):
+    def __init__(self, layers=2, d_model=256, num_heads=4, dff=1024, rate=0.5):
         super(PreAttModel, self).__init__()
-
-        self.m = EncoderLayer(d_model, num_heads, dff, rate)
-        self.out_layer = tf.keras.layers.Dense(1)
+        self.layer = layers
+        self.m = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(layers)]
+        self.out_layer2 = tf.keras.layers.Dense(25, activation=tf.nn.softmax)
+        self.drop2 = tf.keras.layers.Dropout(rate)
 
     def call(self, inp, training, mask=None):
+        batch = tf.shape(inp)[0]
+        h = inp
+        for i in range(self.layer):
+            h = self.m[i](h, training, mask)
 
-        h = self.m(inp, training, mask)
-        h = self.out_layer(h)
-        logits = tf.reduce_sum(h, axis=-1)
-        att_ratio = tf.nn.softmax(logits, axis=-1)
+        h = tf.reshape(h, [batch, -1])
+        # h = self.out_layer(h)
+        # logits = tf.reduce_sum(h, axis=-1)
+        h = self.drop2(h, training=training)
+        att_ratio = self.out_layer2(h)
 
         return att_ratio    # shape == (batch_size, para_num)
 
@@ -63,17 +69,18 @@ class PreAtt(object):
         self.train_loss = tf.keras.metrics.Mean(name='train_loss')
         self.val_loss = tf.keras.metrics.Mean(name='val_loss')
 
-        checkpoint_path = './checkpoints2/t2'
+        checkpoint_path = './checkpoints2/t2_f'
 
         ckpt = tf.train.Checkpoint(model=self.model,
                                    optimizer=self.optimizer)
 
-        self.ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=10)
+        self.ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=20)
 
         # if a checkpoint exists, restore the latest checkpoint.
         if self.ckpt_manager.latest_checkpoint:
-            ckpt.restore(self.ckpt_manager.latest_checkpoint)
-            print('Latest checkpoint restored!!')
+            path = self.ckpt_manager.latest_checkpoint
+            ckpt.restore(path)
+            print('{} restored!!'.format(path))
 
     def cal_loss(self, pre, real):
         pre = tf.reshape(pre, [-1, 1])
@@ -104,7 +111,7 @@ class PreAtt(object):
 
     def train(self):
         trx, tx, tray, ty = load_data()
-        for epoch in range(20):
+        for epoch in range(30):
             start = time.time()
 
             self.train_loss.reset_states()
@@ -149,8 +156,8 @@ class PreAtt(object):
             t = np.concatenate((t, pre.numpy() * 100))
             print(t.shape)
 
-        np.savetxt('pre_att/pre', t)
-        np.savetxt('pre_att/att', ty * 100)
+        np.savetxt('pre_att/pre1', t)
+        np.savetxt('pre_att/att1', ty * 100)
 
     def ex_pred(self, inp):
 
@@ -160,4 +167,4 @@ class PreAtt(object):
 
 if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-    PreAtt().train()
+    PreAtt().predict()
