@@ -43,24 +43,52 @@ def create_padding_mask(seq):
 
 def create_output_mask(seq):
     seq = tf.cast(tf.math.equal(seq, 0), tf.float32)
-    return seq[:, :, tf.newaxis]
+    return seq[:, :, tf.newaxis, tf.newaxis]
 
 
 class AttLayer(tf.keras.layers.Layer):
-    def __init__(self, emb_size):
+    def __init__(self, d_model, num_head, dff, rate):
         super(AttLayer, self).__init__()
-        self.emb_size = emb_size
-        self.weight = tf.Variable(initial_value=tf.random_normal_initializer()([emb_size]), trainable=True)
-        self.full_conn = tf.keras.layers.Dense(emb_size, activation=tf.nn.relu)
+        self.emb_size = d_model
+        self.num_head = num_head
+        self.weight = tf.Variable(initial_value=tf.random_normal_initializer()([d_model]), trainable=True)
+        self.full_conn = tf.keras.layers.Dense(d_model)
+        self.concat = tf.keras.layers.Dense(d_model)
 
-    def call(self, inputs, mask):
+        self.layernorm1 = tf.keras.layers.BatchNormalization(epsilon=1e-6)
+        self.layernorm2 = tf.keras.layers.BatchNormalization(epsilon=1e-6)
+
+        self.dropout1 = tf.keras.layers.Dropout(rate)
+        self.dropout2 = tf.keras.layers.Dropout(rate)
+
+        self.ffn = point_wise_feed_forward_network(d_model, dff)
+
+    def call(self, inputs, mask, training):
         h = self.full_conn(inputs)
+        batch_size = tf.shape(h)[0]
+        depth = self.emb_size // self.num_head
+
+        h = tf.reshape(h, shape=[batch_size, -1, self.num_head, depth])
+        self.weight = tf.reshape(self.weight, shape=[self.num_head, depth])
+        self.weight = self.weight[tf.newaxis, tf.newaxis, :, :]
+
         logits = tf.reduce_sum(tf.multiply(self.weight, h), keepdims=True, axis=-1)
-        logits /= tf.math.sqrt(tf.cast(self.emb_size, tf.float32))
+        logits /= tf.math.sqrt(tf.cast(depth, tf.float32))
         logits += (mask * -1e19)
         alpha = tf.nn.softmax(logits, axis=1, name='alpha')
+        out = tf.reduce_sum(tf.multiply(h, alpha), axis=1)
 
-        return tf.reduce_sum(tf.multiply(inputs, alpha), axis=1)
+        concat = tf.reshape(out, shape=[batch_size, -1])
+        concat = self.concat(concat)  # shape==(batch, d_model)
+
+        concat = self.dropout1(concat, training=training)
+        concat = self.layernorm1(concat)
+
+        ffn_output = self.ffn(concat)  # (batch_size, d_model)
+        ffn_output = self.dropout2(ffn_output, training=training)
+        out = self.layernorm2(concat + ffn_output)  # (batch_size, d_model)
+
+        return out
 
 
 def scaled_dot_product_attention(q, k, v, mask):
@@ -256,12 +284,12 @@ class SenEncoder(tf.keras.layers.Layer):
 
         self.encoder = BaseEncoder(num_layers, d_model, num_heads, dff, input_vocab_size, w_emb, rate)
 
-        self.final_encoder = AttLayer(d_model)
+        self.final_encoder = AttLayer(d_model, num_heads, dff, rate)
 
     def call(self, inp, training, padding_mask, output_mask):
         contextual_words = self.encoder(inp, training, padding_mask)  # (batch_size, inp_seq_len, d_model)
 
-        para_emb = self.final_encoder(contextual_words, output_mask)  # (batch_size, d_model)
+        para_emb = self.final_encoder(contextual_words, output_mask, training)  # (batch_size, d_model)
 
         return para_emb, contextual_words
 

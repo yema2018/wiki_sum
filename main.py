@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 import argparse
 from my_model import *
@@ -315,5 +315,5 @@ class RUN:
 if __name__ == "__main__":
     args = parse_args()
     a = RUN()
-    a.eval_by_beam_search()
+    a.train()
 
