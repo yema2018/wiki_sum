@@ -10,6 +10,7 @@ sp.load('spm9998_3.model')
 
 def generate_batch(batch_size, para_num=25, para_len=64, tgt_len=200, mode='train'):
     l = [i for i in os.listdir('ranked_wiki_b40') if mode in i]
+    # l.reverse()
     for i in l:
         print(i)
         da = torch.load('ranked_wiki_b40/{}'.format(i))

@@ -168,3 +168,4 @@ class PreAtt(object):
 if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
     PreAtt().predict()
+

@@ -55,8 +55,8 @@ class AttLayer(tf.keras.layers.Layer):
         self.full_conn = tf.keras.layers.Dense(d_model)
         self.concat = tf.keras.layers.Dense(d_model)
 
-        self.layernorm1 = tf.keras.layers.BatchNormalization(epsilon=1e-6)
-        self.layernorm2 = tf.keras.layers.BatchNormalization(epsilon=1e-6)
+        self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
 
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
@@ -226,8 +226,8 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.mha = MultiHeadAttention(d_model, num_heads)
         self.ffn = point_wise_feed_forward_network(d_model, dff)
 
-        self.layernorm1 = tf.keras.layers.BatchNormalization(epsilon=1e-6)
-        self.layernorm2 = tf.keras.layers.BatchNormalization(epsilon=1e-6)
+        self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
 
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)

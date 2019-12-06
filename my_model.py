@@ -62,9 +62,9 @@ class DecoderLayer(tf.keras.layers.Layer):
 
         self.ffn = point_wise_feed_forward_network(d_model, dff)
 
-        self.layernorm1 = tf.keras.layers.BatchNormalization(epsilon=1e-6)
-        self.layernorm2 = tf.keras.layers.BatchNormalization(epsilon=1e-6)
-        self.layernorm3 = tf.keras.layers.BatchNormalization(epsilon=1e-6)
+        self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm3 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
 
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
@@ -73,8 +73,7 @@ class DecoderLayer(tf.keras.layers.Layer):
         if hisum:
             self.para_enc = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(para_enc_layer)]
             self.pl = para_enc_layer
-        else:
-            self.gate = tf.keras.layers.Dense(1, activation=tf.nn.sigmoid)
+
         self.hisum = hisum
 
     def call(self, x, enc_g, enc_l, training, look_ahead_mask, padding_mask_g, padding_mask_l):
@@ -99,8 +98,6 @@ class DecoderLayer(tf.keras.layers.Layer):
         words_weights = None
 
         if not self.hisum:
-            gate_ratio = self.gate(out1)
-
             out1r = tf.tile(out1, [self.para_num, 1, 1])   # (batch_size * para_num, target_seq_len, d_model)
             shape = tf.shape(attn1)
 
@@ -112,7 +109,8 @@ class DecoderLayer(tf.keras.layers.Layer):
             attn2 = tf.reshape(attn2, shape=(shape[0], shape[1], -1, shape[-1]))
             attn_weights_l = tf.reshape(attn_weights_l, shape=(shape[0], shape[1], self.para_num, -1))
             attn2 = tf.reduce_sum(tf.multiply(attn2, attn_weights_g1), axis=-2)  # (batch_size, tar_seq_len, d_model)
-            attn2 = self.dropout2(attn2 * gate_ratio + attn_g * (1-gate_ratio), training=training)
+
+            attn2 = self.dropout2(attn2 + attn_g, training=training)
             out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
             words_weights = tf.multiply(attn_weights_l, attn_weights_g1)  # (batch_size, tar_seq_len, para_num, inp_seq_len)
         else:
@@ -223,7 +221,6 @@ class MyModel(tf.keras.Model):
 
     def call(self, inp, training, ranks, tar_inp, cal_pw=False):
         global_info, con_words, padding_mask_l = self.encoder(inp, training, ranks)
-
 
         decoder_out, att_dists, para_weights = self.decoder(tar_inp, global_info,
                                                             con_words, training, ranks, padding_mask_l)

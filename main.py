@@ -1,5 +1,5 @@
 import os
-# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 import argparse
 from my_model import *
@@ -17,10 +17,10 @@ tf.enable_eager_execution()
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
-    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large', help='checkpoint path')
+    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_1d', help='checkpoint path')
 
-    parser.add_argument('--batch_size', type=int, default=16, help='batch size')
-    parser.add_argument('--epoch', type=int, default=4, help='epoch')
+    parser.add_argument('--batch_size', type=int, default=14, help='batch size')
+    parser.add_argument('--epoch', type=int, default=6, help='epoch')
 
     parser.add_argument('--num_layers', type=int, default=5, help='the number of layers in transformer')
     parser.add_argument('--d_model', type=int, default=256, help='the dimension of embedding')
@@ -62,7 +62,7 @@ class RUN:
 
         learning_rate = CustomSchedule(args.d_model)
         self.optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98,
-                                     epsilon=1e-9, clipvalue=0.5, clipnorm=1.0)
+                                     epsilon=1e-9)
         # self.optimizer = tf.keras.optimizers.SGD(0.01)
         self.loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
             from_logits=False, reduction='none')
@@ -79,7 +79,7 @@ class RUN:
 
         # if a checkpoint exists, restore the latest checkpoint.
         if self.ckpt_manager.latest_checkpoint:
-            path = 'checkpoints/train_large/ckpt-30'
+            path = self.ckpt_manager.latest_checkpoint
             self.ckpt.restore(path)
             print('{} restored!!'.format(path))
 
@@ -149,7 +149,7 @@ class RUN:
             self.saver(epoch, start)
 
     def generate_pw(self):
-        batch_set = generate_batch(args.batch_size, mode='train')
+        batch_set = generate_batch(32, mode='train')
         para_weights = np.zeros([1, 25])
         para_embs = np.zeros([1,25,256])
         for (batch, batch_contents) in enumerate(batch_set):
@@ -157,13 +157,13 @@ class RUN:
             tar_inp = tar[:, :-1]
             _, pw, pb = self.seq2seq(inp, False, ranks, tar_inp, True)
             para_weights = np.concatenate((para_weights, pw.numpy()))
-            para_embs = np.concatenate((para_embs, pb.numpy()))
-            print(para_embs.shape)
+            # para_embs = np.concatenate((para_embs, pb.numpy()))
+            print(para_weights.shape)
 
-            if len(para_weights) >= 50000:
+            if len(para_weights) >= 1000:
                 break
-        np.savetxt('pre_att/pw15', para_weights)
-        np.savetxt('pre_att/pb15', para_embs.reshape([-1, 256]))
+        np.savetxt('pre_att/pw', para_weights)
+        # np.savetxt('pre_att/pb', para_embs.reshape([-1, 256]))
 
     def predict_para_att_ratio(self, pb):
 
@@ -184,12 +184,21 @@ class RUN:
         return beta * score
 
     def eval_by_beam_search(self):
-        batch_set = generate_batch(1, mode='test', para_len=120)
+        batch_set = generate_batch(1, mode='test', para_len=100)
         bng = args.block_n_grams
         bnw = args.block_n_words_before
         for (batch, batch_contents) in enumerate(batch_set):
             inp, tar, ranks = batch_contents
             assert inp.shape[0] == 1
+
+            # inpp = list(set(list(inp.reshape(-1))))
+            # inpr = list(range(32000))
+            # for i in inpp:
+            #     inpr.remove(i)
+            # inpr.remove(5)
+            # inpei = tf.reshape(tf.constant(inpr), [-1, 1])
+            # mod2 = tf.scatter_nd(indices=inpei, updates=tf.ones(len(inpr)),
+            #                      shape=tf.constant([32000]))
 
             initial_dec_inp = [4]
             initial_dec_inp = tf.expand_dims(initial_dec_inp, 0)
@@ -216,6 +225,8 @@ class RUN:
                     pre, pw, pb = self.seq2seq(inp, False, ranks, tar_inp, True)
 
                     pre = pre[:, -1, :]  # (1, vocab_extend)
+
+                    # pre -= mod2
 
                     if indices:
                         ind = tf.reshape(tf.constant(indices), [-1, 1])
@@ -245,12 +256,12 @@ class RUN:
                     if o[0][0, -1].numpy() == 5:
                         # print(o[0])
                         output.remove(o)
-                        pred_pw = self.predict_para_att_ratio(o[-1])
-                        diver_score = self.score_diversity(o[0], pred_pw, o[-2])
+                        # pred_pw = self.predict_para_att_ratio(o[-1])
+                        # diver_score = self.score_diversity(o[0], pred_pw, o[-2])
                         # lp = ((5 + int(o[0].shape[-1])) ** 0.7) / ((5 + 1) ** 0.7)
                         o[1] /= int(o[0].shape[-1])
-                        print(o[1], diver_score)
-                        o[1] += diver_score
+                        # print(o[1], diver_score)
+                        # o[1] += diver_score
 
                         final_out.append(o)
                         update_beam += 1
@@ -277,7 +288,7 @@ class RUN:
             abs1 = [int(i) for i in abs1]
             out_sen = self.sp.decode_ids(abs1)
 
-            with open('./temp3/120_b0_post_30', 'a') as fw:
+            with open('./temp3/b0_2', 'a') as fw:
                 fw.write(out_sen)
                 fw.write('\n')
 
@@ -315,5 +326,5 @@ class RUN:
 if __name__ == "__main__":
     args = parse_args()
     a = RUN()
-    a.train()
+    a.eval_by_beam_search()
 
