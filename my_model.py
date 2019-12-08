@@ -47,7 +47,7 @@ class Encoder(tf.keras.layers.Layer):
 
         para_encoder = tf.reshape(para_encoder, [-1, self.para_num, self.d_model])  # (batch_size, para_num, d_model)
 
-        # para_encoder = para_encoder + self.dropout(self.rank_embedding(ranks), training=training)
+        para_encoder += self.rank_embedding(ranks)
 
         return para_encoder, con_words, padding_mask_l
 
@@ -177,7 +177,7 @@ class MyModel(tf.keras.Model):
         w_emb = tf.keras.layers.Embedding(vocab_size, d_model, trainable=True)
         self.encoder = Encoder(num_layers, d_model, num_heads, dff, vocab_size, para_num, w_emb, rate)
 
-        self.decoder = Decoder(2, d_model, num_heads, dff, vocab_size, w_emb, para_num, rate)
+        self.decoder = Decoder(1, d_model, num_heads, dff, vocab_size, w_emb, para_num, rate)
 
         self.out_layer = tf.keras.layers.Dense(vocab_size, activation=tf.nn.softmax)
         # self.p_layer = tf.keras.layers.Dense(1, activation=tf.nn.sigmoid)

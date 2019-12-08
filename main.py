@@ -17,7 +17,7 @@ tf.enable_eager_execution()
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
-    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_2d', help='checkpoint path')
+    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_1d', help='checkpoint path')
 
     parser.add_argument('--batch_size', type=int, default=12, help='batch size')
     parser.add_argument('--epoch', type=int, default=6, help='epoch')
@@ -326,5 +326,5 @@ class RUN:
 if __name__ == "__main__":
     args = parse_args()
     a = RUN()
-    a.eval_by_beam_search()
+    a.generate_pw()
 
