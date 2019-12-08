@@ -31,6 +31,7 @@ class Encoder(tf.keras.layers.Layer):
 
         self.para_num = para_num
         self.d_model = d_model
+        self.dropout = tf.keras.layers.Dropout(rate)
 
     def call(self, inp, training, ranks):
         shape = inp.shape
@@ -46,13 +47,13 @@ class Encoder(tf.keras.layers.Layer):
 
         para_encoder = tf.reshape(para_encoder, [-1, self.para_num, self.d_model])  # (batch_size, para_num, d_model)
 
-        para_encoder = para_encoder + self.rank_embedding(ranks)
+        # para_encoder = para_encoder + self.dropout(self.rank_embedding(ranks), training=training)
 
         return para_encoder, con_words, padding_mask_l
 
 
 class DecoderLayer(tf.keras.layers.Layer):
-    def __init__(self, d_model, num_heads, dff, para_num, rate, para_enc_layer=2, hisum=False):
+    def __init__(self, d_model, num_heads, dff, para_num, rate, para_inter_layer=2, hisum=False):
         super(DecoderLayer, self).__init__()
         self.para_num = para_num
 
@@ -70,9 +71,9 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.dropout3 = tf.keras.layers.Dropout(rate)
 
-        if hisum:
-            self.para_enc = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(para_enc_layer)]
-            self.pl = para_enc_layer
+        # if hisum:
+        #     self.para_enc = [EncoderLayer(d_model, num_heads, dff, rate) for _ in range(para_inter_layer)]
+        #     self.pl = para_inter_layer
 
         self.hisum = hisum
 
@@ -88,9 +89,9 @@ class DecoderLayer(tf.keras.layers.Layer):
         attn1 = self.dropout1(attn1, training=training)
         out1 = self.layernorm1(attn1 + x)
 
-        if self.hisum:
-            for i in range(self.pl):
-                enc_g = self.para_enc[i](enc_g, training, padding_mask_g)
+        # if self.hisum:
+        #     for i in range(self.pl):
+        #         enc_g = self.para_enc[i](enc_g, training, padding_mask_g)
 
         attn_g, attn_weights_g = self.mha2_g(
             enc_g, enc_g, out1, padding_mask_g)  # attn_weights_g.shape == (batch_size, tar_seq_len, para_num)
@@ -135,7 +136,8 @@ class Decoder(tf.keras.layers.Layer):
         self.pos_encoding = positional_encoding(target_vocab_size, d_model)
 
         self.dec_layers = [DecoderLayer(d_model, num_heads, dff, para_num, rate)
-                           for _ in range(num_layers)]
+                           for _ in range(self.num_layers)]
+
         self.dropout = tf.keras.layers.Dropout(rate)
 
     def call(self, x, enc_g, enc_l, training, ranks, padding_mask_l):
@@ -145,8 +147,8 @@ class Decoder(tf.keras.layers.Layer):
         combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
 
         seq_len = tf.shape(x)[1]
-        words_weights = 0
-        para_weights = 0
+        para_weights = None
+        words_weights = None
 
         x = self.embedding(x)  # (batch_size, target_seq_len, d_model)
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
@@ -175,7 +177,7 @@ class MyModel(tf.keras.Model):
         w_emb = tf.keras.layers.Embedding(vocab_size, d_model, trainable=True)
         self.encoder = Encoder(num_layers, d_model, num_heads, dff, vocab_size, para_num, w_emb, rate)
 
-        self.decoder = Decoder(1, d_model, num_heads, dff, vocab_size, w_emb, para_num, rate)
+        self.decoder = Decoder(2, d_model, num_heads, dff, vocab_size, w_emb, para_num, rate)
 
         self.out_layer = tf.keras.layers.Dense(vocab_size, activation=tf.nn.softmax)
         # self.p_layer = tf.keras.layers.Dense(1, activation=tf.nn.sigmoid)
