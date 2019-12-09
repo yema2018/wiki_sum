@@ -17,12 +17,12 @@ tf.enable_eager_execution()
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
-    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_1d', help='checkpoint path')
+    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_3d_r', help='checkpoint path')
 
-    parser.add_argument('--batch_size', type=int, default=12, help='batch size')
+    parser.add_argument('--batch_size', type=int, default=14, help='batch size')
     parser.add_argument('--epoch', type=int, default=6, help='epoch')
 
-    parser.add_argument('--num_layers', type=int, default=5, help='the number of layers in transformer')
+    parser.add_argument('--num_layers', type=int, default=3, help='the number of layers in transformer')
     parser.add_argument('--d_model', type=int, default=256, help='the dimension of embedding')
     parser.add_argument('--num_headers', type=int, default=4, help='the number of attention headers')
     parser.add_argument('--dff', type=int, default=1024, help='the number of units in point_wise_feed_forward_network')
@@ -37,7 +37,7 @@ def parse_args():
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=50000):
+    def __init__(self, d_model, warmup_steps=16000):
         super(CustomSchedule, self).__init__()
 
         self.d_model = d_model
@@ -160,7 +160,7 @@ class RUN:
             # para_embs = np.concatenate((para_embs, pb.numpy()))
             print(para_weights.shape)
 
-            if len(para_weights) >= 1000:
+            if len(para_weights) >= 100:
                 break
         np.savetxt('pre_att/pw', para_weights)
         # np.savetxt('pre_att/pb', para_embs.reshape([-1, 256]))
@@ -288,7 +288,7 @@ class RUN:
             abs1 = [int(i) for i in abs1]
             out_sen = self.sp.decode_ids(abs1)
 
-            with open('./temp3/b0_1', 'a') as fw:
+            with open('./temp3/b0_3', 'a') as fw:
                 fw.write(out_sen)
                 fw.write('\n')
 

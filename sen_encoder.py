@@ -295,3 +295,13 @@ class SenEncoder(tf.keras.layers.Layer):
 
 
 
+if __name__ == '__main__':
+    import os
+    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
+    a=positional_encoding(25, 256)
+    b = positional_encoding(100,256)
+    with tf.Session() as sess:
+        a1=sess.run(a)
+        b1=sess.run(b)
+        print(b)
