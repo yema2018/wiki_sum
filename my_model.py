@@ -135,7 +135,7 @@ class Decoder(tf.keras.layers.Layer):
         self.embedding = w_emb
         self.pos_encoding = positional_encoding(target_vocab_size, d_model)
 
-        self.dec_layers = [DecoderLayer(d_model, num_heads, dff, para_num, rate)
+        self.dec_layers = [DecoderLayer(d_model, num_heads, dff, para_num, rate, hisum=False)
                            for _ in range(self.num_layers)]
 
         self.dropout = tf.keras.layers.Dropout(rate)
@@ -147,7 +147,7 @@ class Decoder(tf.keras.layers.Layer):
         combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
 
         seq_len = tf.shape(x)[1]
-        para_weights = []
+        para_weights = 0
         words_weights = None
 
         x = self.embedding(x)  # (batch_size, target_seq_len, d_model)
@@ -159,7 +159,7 @@ class Decoder(tf.keras.layers.Layer):
         for i in range(self.num_layers):
             x, words_weights, pw = self.dec_layers[i](x, enc_g, enc_l, training,
                                                    combined_mask, padding_mask_g, padding_mask_l)
-            para_weights.append(pw)
+            para_weights += pw
 
         # x.shape == (batch_size, target_seq_len, d_model)
         # words_weights.shape == (batch_size, tar_seq_len, para_num, inp_seq_len)
@@ -222,18 +222,21 @@ class MyModel(tf.keras.Model):
 
         return final_dists
 
-    def call(self, inp, training, ranks, tar_inp, cal_pw=False):
+    def call(self, inp, training, ranks, tar_inp, tar_real=None, cal_pw=False):
         global_info, con_words, padding_mask_l = self.encoder(inp, training, ranks)
 
         decoder_out, att_dists, para_weights = self.decoder(tar_inp, global_info,
                                                             con_words, training, ranks, padding_mask_l)
-        para_weights = para_weights[-1]
+        # para_weights = para_weights[1]
 
         pw = None
         if cal_pw:
-            tar_mask = tf.math.logical_not(tf.math.equal(tar_inp, 0))
-            tar_mask = tf.cast(tar_mask, dtype=para_weights.dtype)
-            pw = tf.reduce_sum(tf.expand_dims(tar_mask, axis=-1) * para_weights, axis=1)
+            if tar_real is None:
+                pw = tf.reduce_sum(para_weights, axis=1)
+            else:
+                tar_mask = tf.math.logical_not(tf.math.equal(tar_real, 0))
+                tar_mask = tf.cast(tar_mask, dtype=para_weights.dtype)
+                pw = tf.reduce_sum(tf.expand_dims(tar_mask, axis=-1) * para_weights, axis=1)
 
         vocab_dists = self.out_layer(decoder_out)  # (batch_size, target_seq_len, vocab_size)
 
