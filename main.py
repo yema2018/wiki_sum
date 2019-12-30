@@ -14,12 +14,12 @@ from nltk.util import ngrams
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
-    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_4d_xl', help='checkpoint path')
+    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large', help='checkpoint path')
 
     parser.add_argument('--batch_size', type=int, default=8, help='batch size')
     parser.add_argument('--epoch', type=int, default=6, help='epoch')
 
-    parser.add_argument('--num_layers', type=int, default=4, help='the number of layers in transformer')
+    parser.add_argument('--num_layers', type=int, default=1, help='the number of layers in transformer')
     parser.add_argument('--d_model', type=int, default=256, help='the dimension of embedding')
     parser.add_argument('--num_headers', type=int, default=4, help='the number of attention headers')
     parser.add_argument('--dff', type=int, default=1024, help='the number of units in point_wise_feed_forward_network')
@@ -96,7 +96,7 @@ class RUN:
         tar_real = tar[:, 1:]
 
         with tf.GradientTape() as tape:
-            pre, _, _ = self.seq2seq(inp, True, ranks, tar_inp)
+            pre, _ = self.seq2seq(inp, True, ranks, tar_inp)
             # print(tf.argmax(pre, axis=-1))
 
             loss = self.masked_loss_function(tar_real, pre)

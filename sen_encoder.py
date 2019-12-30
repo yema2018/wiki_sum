@@ -285,14 +285,12 @@ class SenEncoder(tf.keras.layers.Layer):
 
         self.encoder = BaseEncoder(num_layers, d_model, num_heads, dff, input_vocab_size, w_emb, rate)
 
-        self.final_encoder = AttLayer(d_model, num_heads, dff, rate)
+        # self.final_encoder = AttLayer(d_model, num_heads, dff, rate)
 
     def call(self, inp, training, padding_mask, output_mask):
         contextual_words, x = self.encoder(inp, training, padding_mask)  # (batch_size, inp_seq_len, d_model)
 
-        para_emb = self.final_encoder(x, output_mask, training)  # (batch_size, d_model)
-
-        return para_emb, contextual_words
+        return contextual_words
 
 
 
