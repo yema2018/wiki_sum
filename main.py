@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 import argparse
 from my_model import *
@@ -14,12 +14,12 @@ from nltk.util import ngrams
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
-    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_3d_r', help='checkpoint path')
+    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_4d_xl', help='checkpoint path')
 
-    parser.add_argument('--batch_size', type=int, default=16, help='batch size')
+    parser.add_argument('--batch_size', type=int, default=8, help='batch size')
     parser.add_argument('--epoch', type=int, default=6, help='epoch')
 
-    parser.add_argument('--num_layers', type=int, default=3, help='the number of layers in transformer')
+    parser.add_argument('--num_layers', type=int, default=4, help='the number of layers in transformer')
     parser.add_argument('--d_model', type=int, default=256, help='the dimension of embedding')
     parser.add_argument('--num_headers', type=int, default=4, help='the number of attention headers')
     parser.add_argument('--dff', type=int, default=1024, help='the number of units in point_wise_feed_forward_network')
@@ -29,10 +29,9 @@ def parse_args():
     parser.add_argument('--block_n_grams', type=int, default=3, help='prevent generating n grams')
     parser.add_argument('--block_n_words_before', type=int, default=2, help='block n words before the current step')
 
-
     return parser.parse_args()
 
-args = parse_args()
+
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, d_model, warmup_steps=16000):
         super(CustomSchedule, self).__init__()
@@ -56,7 +55,7 @@ class RUN:
         self.sp.load('spm9998_3.model')
 
         self.seq2seq = MyModel(args.num_layers, args.d_model, args.num_headers, args.dff, 32000,
-                                 5, args.drop_rate)
+                                args.drop_rate)
 
         learning_rate = CustomSchedule(args.d_model)
         self.optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98,
@@ -193,7 +192,7 @@ class RUN:
 
             return pw.numpy().reshape([-1])
 
-        batch_set = generate_batch(1, mode='test', para_len=100, para_num=5)
+        batch_set = generate_batch(1, mode='test', para_len=64, para_num=25)
         bng = args.block_n_grams
         bnw = args.block_n_words_before
         for (batch, batch_contents) in enumerate(batch_set):
@@ -218,6 +217,14 @@ class RUN:
             final_out = []
             final_out2 = []
             update_beam = 0
+
+            # _, _, pb = self.seq2seq(inp, False, ranks, initial_dec_inp)
+            # pred_pw = predict_para_att_ratio(pb, ranks)
+            #
+            # fil, fil_id = tf.nn.top_k(pred_pw, 10)
+            # print(fil_id)
+            # inp = inp[:, fil_id, :]
+            # ranks = np.ones(shape=(1,10))
 
             for step in range(200):
                 temp = []
@@ -251,6 +258,7 @@ class RUN:
                     while 10 in bnw_block:
                         bnw_block.remove(10)
                     bnw_block = bnw_block[-bnw:]
+                    bnw_block.append(203)
 
                     indices1 = tf.constant(tf.reshape(bnw_block, [-1, 1]))
                     mod1 = tf.scatter_nd(indices=indices1, updates=tf.ones(indices1.shape[0]),
@@ -307,7 +315,7 @@ class RUN:
             abs1 = [int(i) for i in abs1]
             out_sen = self.sp.decode_ids(abs1)
 
-            with open('temp/ttt', 'a') as fw:
+            with open('temp/ttt1', 'a') as fw:
                 fw.write(out_sen)
                 fw.write('\n')
 
@@ -332,7 +340,7 @@ class RUN:
     def valid(self):
         path_range = range(1, 31)
         for path in path_range:
-            self.ckpt.restore('checkpoints/train_large_hr/ckpt-{}'.format(path))
+            self.ckpt.restore('checkpoints/train_large_3d_ex/ckpt-{}'.format(path))
             print('ckpt-{} restored'.format(path))
             start = time.time()
             self.train_loss.reset_states()
@@ -389,7 +397,7 @@ class PreAtt(object):
         self.train_loss = tf.keras.metrics.Mean(name='train_loss')
         self.val_loss = tf.keras.metrics.Mean(name='val_loss')
 
-        checkpoint_path = './checkpoints2/3d'
+        checkpoint_path = './checkpoints2/3d_l'
 
         ckpt = tf.train.Checkpoint(model=self.model,
                                    optimizer=self.optimizer)
@@ -453,7 +461,7 @@ class PreAtt(object):
 
                 self.train_step(pb, pw, ranks)
 
-                if batch % 5 == 0 :
+                if batch % 50 == 0 :
                     print('Epoch {} Batch {} Loss {:.4f}'.format(
                         epoch + 1, batch, self.train_loss.result()))
 
@@ -505,7 +513,7 @@ class PreAtt(object):
 if __name__ == "__main__":
     args = parse_args()
     a = RUN()
-    a.eval_by_beam_search()
+    a.train()
 
-    # b = PreAtt()
-    # b.train()
+    #b = PreAtt()
+    #b.train()
