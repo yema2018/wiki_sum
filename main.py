@@ -1,5 +1,5 @@
 import os
-# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 import argparse
 from my_model import *
@@ -14,9 +14,9 @@ from nltk.util import ngrams
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
-    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large', help='checkpoint path')
+    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_st_1d', help='checkpoint path')
 
-    parser.add_argument('--batch_size', type=int, default=8, help='batch size')
+    parser.add_argument('--batch_size', type=int, default=28, help='batch size')
     parser.add_argument('--epoch', type=int, default=6, help='epoch')
 
     parser.add_argument('--num_layers', type=int, default=1, help='the number of layers in transformer')
@@ -149,23 +149,24 @@ class RUN:
         batch_set = generate_batch(32, mode='train')
         para_weights = np.zeros([1, 25])
         rankss = np.zeros([1, 25])
+
         para_embs = np.zeros([1,25,256])
         for (batch, batch_contents) in enumerate(batch_set):
             inp, tar, ranks = batch_contents
             tar_inp = tar[:, :-1]
             tar_real = tar[:, 1:]
-            _, pw, pb = self.seq2seq(inp, False, ranks, tar_inp, tar_real, True)
+            _, pw = self.seq2seq(inp, False, ranks, tar_inp, tar_real, True)
             para_weights = np.concatenate((para_weights, pw.numpy()))
-            para_embs = np.concatenate((para_embs, pb.numpy()))
+            # para_embs = np.concatenate((para_embs, pb.numpy()))
 
-            rankss = np.concatenate((rankss, ranks))
+            # rankss = np.concatenate((rankss, ranks))
             print(para_weights.shape)
 
-            if len(para_weights) >= 200000:
+            if len(para_weights) >= 100:
                 break
         np.savetxt('pre_att/pw', para_weights)
-        np.savetxt('pre_att/pb', para_embs.reshape([-1, 256]))
-        np.savetxt('pre_att/ranks', rankss)
+        # np.savetxt('pre_att/pb', para_embs.reshape([-1, 256]))
+        # np.savetxt('pre_att/ranks', rankss)
 
 
 
@@ -242,7 +243,7 @@ class RUN:
                             if tar_inp2[-(bng-1):] == list(gram[:(bng-1)]):
                                 indices.append(gram[-1])
 
-                    pre, _, _ = self.seq2seq(inp, False, ranks, tar_inp)
+                    pre, _ = self.seq2seq(inp, False, ranks, tar_inp)
 
                     pre = pre[:, -1, :]  # (1, vocab_extend)
 
@@ -513,7 +514,7 @@ class PreAtt(object):
 if __name__ == "__main__":
     args = parse_args()
     a = RUN()
-    a.train()
+    a.generate_pw()
 
     #b = PreAtt()
     #b.train()

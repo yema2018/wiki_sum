@@ -268,12 +268,11 @@ class BaseEncoder(tf.keras.layers.Layer):
         x += self.pos_encoding[:, :seq_len, :]
 
         x = self.dropout(x, training=training)
-        x1 = x
 
         for i in range(self.num_layers):
-            x1 = self.enc_layers[i](x1, training, mask)
+            x = self.enc_layers[i](x, training, mask)
 
-        return x1, x  # (batch_size, input_seq_len, d_model)
+        return x  # (batch_size, input_seq_len, d_model)
 
 
 class SenEncoder(tf.keras.layers.Layer):
@@ -285,10 +284,8 @@ class SenEncoder(tf.keras.layers.Layer):
 
         self.encoder = BaseEncoder(num_layers, d_model, num_heads, dff, input_vocab_size, w_emb, rate)
 
-        # self.final_encoder = AttLayer(d_model, num_heads, dff, rate)
-
     def call(self, inp, training, padding_mask, output_mask):
-        contextual_words, x = self.encoder(inp, training, padding_mask)  # (batch_size, inp_seq_len, d_model)
+        contextual_words = self.encoder(inp, training, padding_mask)  # (batch_size, inp_seq_len, d_model)
 
         return contextual_words
 

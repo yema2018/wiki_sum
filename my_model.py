@@ -57,10 +57,12 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.layernorm3 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm4 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
 
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.dropout3 = tf.keras.layers.Dropout(rate)
+        self.dropout4 = tf.keras.layers.Dropout(rate)
 
         self.d_model = d_model
 
@@ -75,31 +77,29 @@ class DecoderLayer(tf.keras.layers.Layer):
         out1 = self.layernorm1(attn1 + x)
         shape = tf.shape(attn1)
 
-        out1r = tf.tile(out1, [para_num, 1, 1])  # (batch_size * para_num, target_seq_len, d_model)
+        out1r = tf.tile(out1, [1, para_num, 1])  # (batch_size * para_num, target_seq_len, d_model)
+        out1r = tf.reshape(out1r, (-1, shape[1], shape[-1]))
 
         attn2, attn_weights_l = self.mha2_l(enc_l, enc_l, out1r, padding_mask_l)
-        # attn2 = tf.reshape(attn2, shape=(shape[0], shape[1], -1, shape[-1]))
-        # attn_weights_l = tf.reshape(attn_weights_l, shape=(shape[0], shape[1], para_num, -1))
+        attn2 = tf.reshape(attn2, shape=(shape[0], -1, shape[1], shape[-1]))
+        attn2 = tf.transpose(attn2, [0, 2, 1, 3])
         # attn2.shape = (batch_size, tar_seq_len, para_num, d_model)
+        # attn_weights_l = tf.reshape(attn_weights_l, shape=(shape[0], shape[1], para_num, -1))
         # attn_weights_l.shape==(batch_size, tar_seq_len, para_num, inp_seq_len)
 
         pos_encoding = positional_encoding(para_num, self.d_model)
         attn2 += pos_encoding[:, tf.newaxis, :, :]
 
-        attn3, attn_weights_g = self.mha2_g(attn2, attn2, out1r, padding_mask_g)
-        attn3 = tf.reshape(attn3, shape=(shape[0], shape[1], -1, shape[-1]))
-        # attn3.shape = (batch_size, tar_seq_len, para_num, d_model)
+        attn2 = self.dropout4(attn2, training=training)
+        attn2 = self.layernorm4(attn2 + out1[:, :, tf.newaxis, :])
 
-        attn3, attn_weights_g = self.mha2_g(attn2[:, 0, :, :], attn2[:, 0, :, :], out1[:, 0, :][:, tf.newaxis, :],
-                                            padding_mask_g)
-        # attn3.shape == (batch_size, 1, d_model)
-        # attn_weights_g.shape == (batch_size, 1, para_num)
+        attn2x = tf.reshape(attn2, shape=(-1, para_num, self.d_model))
+        out1c = tf.reshape(out1, shape=(-1, 1, self.d_model))
 
-        for i in range(1, int(shape[1])):
-            temp, temp1 = self.mha2_g(attn2[:, i, :, :], attn2[:, i, :, :], out1[:, i, :][:, tf.newaxis, :],
-                                               padding_mask_g)
-            attn3 = tf.concat((attn3, temp), axis=1)
-            attn_weights_g = tf.concat((attn_weights_g, temp1), axis=1)
+        attn3, attn_weights_g = self.mha2_g(attn2x, attn2x, out1c, padding_mask_g)
+        attn3 = tf.reshape(attn3, shape=(shape[0], shape[1], self.d_model))
+        attn_weights_g = tf.reshape(attn_weights_g, shape=(shape[0], -1, para_num))
+        # print(attn_weights_g[0,:,:])
 
         attn3 = self.dropout2(attn3, training=training)
         out2 = self.layernorm2(attn3 + out1)  # (batch_size, target_seq_len, d_model)
@@ -127,7 +127,12 @@ class Decoder(tf.keras.layers.Layer):
         self.dropout = tf.keras.layers.Dropout(rate)
 
     def call(self, x, para_num, enc_l, training, ranks, padding_mask_l):
+        tar_seq_len = tf.shape(x)[1]
+        ranks = tf.tile(ranks, [1, tar_seq_len])
+        ranks = tf.reshape(ranks, (-1, para_num))
+
         padding_mask_g = create_padding_mask(ranks)
+
         look_ahead_mask = create_look_ahead_mask(tf.shape(x)[1])
         dec_target_padding_mask = create_padding_mask(x)
         combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
