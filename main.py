@@ -14,6 +14,7 @@ from nltk.util import ngrams
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
+    parser.add_argument('--model_mode', nargs='?', default='v', help='v: vertical or p: parallel')
     parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_st_1d', help='checkpoint path')
 
     parser.add_argument('--batch_size', type=int, default=28, help='batch size')
@@ -55,7 +56,7 @@ class RUN:
         self.sp.load('spm9998_3.model')
 
         self.seq2seq = MyModel(args.num_layers, args.d_model, args.num_headers, args.dff, 32000,
-                                args.drop_rate)
+                                args.drop_rate, args.model_mode)
 
         learning_rate = CustomSchedule(args.d_model)
         self.optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98,
@@ -79,8 +80,6 @@ class RUN:
             path = self.ckpt_manager.latest_checkpoint
             self.ckpt.restore(path)
             print('{} restored!!'.format(path))
-
-
 
     def masked_loss_function(self, real, pred):
         mask = tf.math.logical_not(tf.math.equal(real, 0))
@@ -514,7 +513,7 @@ class PreAtt(object):
 if __name__ == "__main__":
     args = parse_args()
     a = RUN()
-    a.generate_pw()
+    a.eval_by_beam_search()
 
     #b = PreAtt()
     #b.train()
