@@ -50,7 +50,7 @@ class Encoder(tf.keras.layers.Layer):
 
             para_encoder = tf.reshape(para_encoder, [-1, para_num, self.d_model])  # (batch_size, para_num, d_model)
             # para_encoder += self.rank_embedding(ranks)
-            para_encoder += pos_encoding[:, :para_num, :]
+            para_encoder += pos_encoding
 
             return con_words, padding_mask_l, para_encoder
 
@@ -77,6 +77,7 @@ class DecoderLayer(tf.keras.layers.Layer):
 
         self.d_model = d_model
         self.mode = mode
+        self.pos_encoding = positional_encoding(100, self.d_model)
 
     def call(self, x, para_num, enc_l, training, look_ahead_mask, padding_mask_g, padding_mask_l):
         """
@@ -99,11 +100,10 @@ class DecoderLayer(tf.keras.layers.Layer):
             # attn_weights_l = tf.reshape(attn_weights_l, shape=(shape[0], shape[1], para_num, -1))
             # attn_weights_l.shape==(batch_size, tar_seq_len, para_num, inp_seq_len)
 
-            pos_encoding = positional_encoding(para_num, self.d_model)
-            attn2 += pos_encoding[:, tf.newaxis, :, :]
+            attn2 += self.pos_encoding[:, tf.newaxis, :para_num, :]
 
             attn2 = self.dropout4(attn2, training=training)
-            attn2 = self.layernorm4(attn2 + out1[:, :, tf.newaxis, :])
+            attn2 = self.layernorm4(attn2)
 
             attn2x = tf.reshape(attn2, shape=(-1, para_num, self.d_model))
             out1c = tf.reshape(out1, shape=(-1, 1, self.d_model))
@@ -114,7 +114,7 @@ class DecoderLayer(tf.keras.layers.Layer):
             # print(attn_weights_g[0,:,:])
 
             attn3 = self.dropout2(attn3, training=training)
-            out2 = self.layernorm2(attn3 + out1)  # (batch_size, target_seq_len, d_model)
+            out2 = self.layernorm2(attn3)  # (batch_size, target_seq_len, d_model)
 
             ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
             ffn_output = self.dropout3(ffn_output, training=training)
@@ -133,6 +133,7 @@ class DecoderLayer(tf.keras.layers.Layer):
 
             out1r = tf.tile(out1, [1, para_num, 1])  # (batch_size * para_num, target_seq_len, d_model)
             shape = tf.shape(attn1)
+            out1r = tf.reshape(out1r, (-1, shape[1], shape[-1]))
 
             attn_weights_gex = tf.expand_dims(attn_weights_g, -1)
             attn2, attn_weights_l = self.mha2_l(enc_l, enc_l, out1r, padding_mask_l)
@@ -168,14 +169,16 @@ class Decoder(tf.keras.layers.Layer):
         self.pos_encoding = positional_encoding(target_vocab_size, d_model)
 
         self.dec_layers = [DecoderLayer(d_model, num_heads, dff, rate, mode)
-                           for _ in range(self.num_layers)]
+                           for _ in range(num_layers)]
 
         self.dropout = tf.keras.layers.Dropout(rate)
+        self.mode = mode
 
     def call(self, x, para_num, enc_l, training, ranks, padding_mask_l):
-        tar_seq_len = tf.shape(x)[1]
-        ranks = tf.tile(ranks, [1, tar_seq_len])
-        ranks = tf.reshape(ranks, (-1, para_num))
+        if self.mode == 'v':
+            tar_seq_len = tf.shape(x)[1]
+            ranks = tf.tile(ranks, [1, tar_seq_len])
+            ranks = tf.reshape(ranks, (-1, para_num))
 
         padding_mask_g = create_padding_mask(ranks)
 
@@ -223,7 +226,7 @@ class MyModel(tf.keras.Model):
 
         decoder_out, para_weights = self.decoder(tar_inp, para_num,
                                                             con_words, training, ranks, padding_mask_l)
-        # para_weights = para_weights[1]
+        # para_weights = para_weights[0]
 
         pw = None
         if cal_pw:

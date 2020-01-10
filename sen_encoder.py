@@ -304,7 +304,5 @@ if __name__ == '__main__':
 
     a=positional_encoding(25, 256)
     b = positional_encoding(100,256)
-    with tf.Session() as sess:
-        a1=sess.run(a)
-        b1=sess.run(b)
-        print(b)
+    print(a)
+    print(b)

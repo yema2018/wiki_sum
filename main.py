@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 import argparse
 from my_model import *
@@ -15,12 +15,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
     parser.add_argument('--mode', nargs='?', default='train', help='must be the val_no_sp/decode')
     parser.add_argument('--model_mode', nargs='?', default='v', help='v: vertical or p: parallel')
-    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_st_1d', help='checkpoint path')
+    parser.add_argument('--ckpt_path', nargs='?', default='./checkpoints/train_large_v_5d_30_no', help='checkpoint path')
 
-    parser.add_argument('--batch_size', type=int, default=28, help='batch size')
+    parser.add_argument('--batch_size', type=int, default=4, help='batch size')
     parser.add_argument('--epoch', type=int, default=6, help='epoch')
 
-    parser.add_argument('--num_layers', type=int, default=1, help='the number of layers in transformer')
+    parser.add_argument('--num_layers', type=int, default=3, help='the number of layers in transformer')
     parser.add_argument('--d_model', type=int, default=256, help='the dimension of embedding')
     parser.add_argument('--num_headers', type=int, default=4, help='the number of attention headers')
     parser.add_argument('--dff', type=int, default=1024, help='the number of units in point_wise_feed_forward_network')
@@ -95,7 +95,7 @@ class RUN:
         tar_real = tar[:, 1:]
 
         with tf.GradientTape() as tape:
-            pre, _ = self.seq2seq(inp, True, ranks, tar_inp)
+            pre, pw = self.seq2seq(inp, True, ranks, tar_inp)
             # print(tf.argmax(pre, axis=-1))
 
             loss = self.masked_loss_function(tar_real, pre)
@@ -106,7 +106,7 @@ class RUN:
 
         self.train_loss(loss)
         self.train_acc(tar_real, pre)
-        return tar_real, tf.argmax(pre, axis=-1)
+        return tar_real, tf.argmax(pre, axis=-1), pw
 
     def saver(self, epoch, start):
         ckpt_save_path = self.ckpt_manager.save()
@@ -131,11 +131,12 @@ class RUN:
                 inp, tar, ranks= batch_contents
                 # print(inp.shape, inp_x.shape, ranks.shape, sen_pos.shape,
                 # tar.shape, tar_x.shape)
-                real, pre = self.train_step(inp, ranks, tar)
+                real, pre, pw = self.train_step(inp, ranks, tar)
 
                 if batch % 50 == 0:
-                    print(real)
-                    print(pre)
+                    # print(real)
+                    # print(pre)
+                    # print(pw[0])
                     print('Epoch {} Batch {} Loss {:.4f} Accuracy {:.4f}'.format(
                         epoch + 1, batch, self.train_loss.result(), self.train_acc.result()))
 
@@ -146,7 +147,7 @@ class RUN:
 
     def generate_pw(self):
         batch_set = generate_batch(32, mode='train')
-        para_weights = np.zeros([1, 25])
+        para_weights = np.zeros([1, 30])
         rankss = np.zeros([1, 25])
 
         para_embs = np.zeros([1,25,256])
@@ -163,11 +164,9 @@ class RUN:
 
             if len(para_weights) >= 100:
                 break
-        np.savetxt('pre_att/pw', para_weights)
+        np.savetxt('pre_att/pw1', para_weights)
         # np.savetxt('pre_att/pb', para_embs.reshape([-1, 256]))
         # np.savetxt('pre_att/ranks', rankss)
-
-
 
     def score_diversity(self, pred_att_ratio, real_att, beta=0.5):
         real_att = real_att.numpy()[0, :]
@@ -199,7 +198,7 @@ class RUN:
             inp, tar, ranks = batch_contents
             assert inp.shape[0] == 1
 
-            # inpp = list(set(list(inp.reshape(-1)819458008)))
+            # inpp = list(set(list(inp.reshape(-1))))
             # inpr = list(range(32000))
             # for i in inpp:
             #     inpr.remove(i)
@@ -258,7 +257,6 @@ class RUN:
                     while 10 in bnw_block:
                         bnw_block.remove(10)
                     bnw_block = bnw_block[-bnw:]
-                    bnw_block.append(203)
 
                     indices1 = tf.constant(tf.reshape(bnw_block, [-1, 1]))
                     mod1 = tf.scatter_nd(indices=indices1, updates=tf.ones(indices1.shape[0]),
@@ -315,7 +313,7 @@ class RUN:
             abs1 = [int(i) for i in abs1]
             out_sen = self.sp.decode_ids(abs1)
 
-            with open('temp/ttt1', 'a') as fw:
+            with open('temp/ttt2', 'a') as fw:
                 fw.write(out_sen)
                 fw.write('\n')
 
@@ -332,15 +330,15 @@ class RUN:
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
 
-        pre, _, _ = self.seq2seq(inp, False, ranks, tar_inp)
+        pre, _, = self.seq2seq(inp, False, ranks, tar_inp)
 
         loss = self.masked_loss_function(tar_real, pre)
         self.train_loss(loss)
 
     def valid(self):
-        path_range = range(1, 31)
+        path_range = range(1, 14)
         for path in path_range:
-            self.ckpt.restore('checkpoints/train_large_3d_ex/ckpt-{}'.format(path))
+            self.ckpt.restore('checkpoints/train_large_v_1d_s_25/ckpt-{}'.format(path))
             print('ckpt-{} restored'.format(path))
             start = time.time()
             self.train_loss.reset_states()
@@ -513,7 +511,7 @@ class PreAtt(object):
 if __name__ == "__main__":
     args = parse_args()
     a = RUN()
-    a.eval_by_beam_search()
+    a.train()
 
     #b = PreAtt()
     #b.train()
