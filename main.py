@@ -10,12 +10,12 @@ import sentencepiece as spm
 from nltk.util import ngrams
 
 # tf.enable_eager_execution()
-
-gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
-tf.config.experimental.set_virtual_device_configuration(
-    gpus[0],
-    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1000)]
-)
+#
+# gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
+# tf.config.experimental.set_virtual_device_configuration(
+#     gpus[0],
+#     [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1000)]
+# )
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
@@ -152,27 +152,19 @@ class RUN:
             self.saver(epoch, start)
 
     def generate_pw(self):
-        batch_set = generate_batch(32, mode='train')
+        batch_set = generate_batch(32, para_num=30, para_len=100, mode='test')
         para_weights = np.zeros([1, 30])
-        rankss = np.zeros([1, 25])
 
-        para_embs = np.zeros([1,25,256])
         for (batch, batch_contents) in enumerate(batch_set):
             inp, tar, ranks = batch_contents
             tar_inp = tar[:, :-1]
             tar_real = tar[:, 1:]
-            _, pw = self.seq2seq(inp, False, ranks, tar_inp, tar_real, True)
+            _, pw, _ = self.seq2seq(inp, False, ranks, tar_inp, tar_real, True)
             para_weights = np.concatenate((para_weights, pw.numpy()))
-            # para_embs = np.concatenate((para_embs, pb.numpy()))
 
-            # rankss = np.concatenate((rankss, ranks))
-            print(para_weights.shape)
-
-            if len(para_weights) >= 100:
-                break
+            # if len(para_weights) >= 100:
+            #     break
         np.savetxt('pre_att/pw1', para_weights)
-        # np.savetxt('pre_att/pb', para_embs.reshape([-1, 256]))
-        # np.savetxt('pre_att/ranks', rankss)
 
     def score_diversity(self, pred_att_ratio, real_att, ranks, beta=0.8):
         real_att = real_att.numpy()[0, :]
@@ -185,7 +177,6 @@ class RUN:
                 continue
             score += np.log(np.minimum(real_att[i], pred_att_ratio[i]))
 
-        # con_sim = cosine_similarity(real_att.reshape(1, -1), pred_att_ratio.reshape(1, -1))[0]
 
         return beta * score
 
@@ -210,18 +201,24 @@ class RUN:
             except:
                 initial_dec_inp = [4]
             initial_dec_inp = tf.expand_dims(initial_dec_inp, 0)
-            output = [[initial_dec_inp, 0, tf.zeros(shape=(1, 30), dtype=tf.float32)]]
+            output = [[initial_dec_inp, 0]]
             final_out = []
             update_beam = 0
 
             _, _, pb = self.seq2seq(inp, False, ranks, initial_dec_inp)
             pred_pw = predict_para_att_ratio(pb, ranks)
 
-            # fil, fil_id = tf.nn.top_k(pred_pw, 15)
-            # print(fil_id)
-            # inp = inp[:, fil_id, :]
-            # ranks = np.ones(shape=(1,15))
+            # compression
+            count_zero = list(ranks[0,:]).count(0)
+            fil_len = 25
+            fil, fil_id = tf.nn.top_k(pred_pw, fil_len)
+            if fil_len > 30 - count_zero:
+                count_remove = count_zero - (30 - fil_len)
+                fil_id = fil_id[:-count_remove]
+            inp = inp[:, fil_id, :]
+            ranks = np.ones(shape=(1, len(fil_id)))
 
+            # generation
             for step in range(200):
                 temp = []
 
@@ -242,13 +239,11 @@ class RUN:
 
                     pre = pre[:, -1, :]  # (1, vocab_extend)
 
-                    # pre -= mod2
-
                     if indices:
                         ind = tf.reshape(tf.constant(indices), [-1, 1])
                         mod = tf.scatter_nd(indices=ind, updates=tf.ones(len(indices)),
                                             shape=tf.constant([pre.shape[-1]]))
-                        pre -= mod
+                        pre -= mod  # remove repeated tri-grams
 
                     bnw_block = list(out[0][0, -(bnw*2):].numpy())
                     while 10 in bnw_block:
@@ -258,19 +253,15 @@ class RUN:
                     indices1 = tf.constant(tf.reshape(bnw_block, [-1, 1]))
                     mod1 = tf.scatter_nd(indices=indices1, updates=tf.ones(indices1.shape[0]),
                                          shape=tf.constant([pre.shape[-1]]))
-                    pre -= mod1
+                    pre -= mod1  # remove the same tokes within 2 steps
 
                     val, index = tf.nn.top_k(pre, bsize)
 
                     for i in range(bsize):
                         q = tf.concat((out[0], tf.expand_dims([index[0, i]], 0)), axis=-1)
-                        _, pw, _ = self.seq2seq(inp, False, ranks, q, cal_pw=True)
-                        pw = tf.nn.softmax(pw, axis=-1)
-                        str_cov = 1 - tf.reduce_sum(tf.minimum(out[-1], pw))
 
-                        p = out[1] + np.log(val[0, i]) + 10 * str_cov
-
-                        temp.append([q, p, out[-1]+pw])
+                        p = out[1] + np.log(val[0, i])
+                        temp.append([q, p])
 
                 output = sorted(temp, key=lambda x: x[1])[-bsize:]
                 print(output[-1][0])
@@ -278,14 +269,14 @@ class RUN:
                 for o in output.copy():
 
                     if o[0][0, -1].numpy() == 5:
+
                         output.remove(o)
-                        # _, pw, pb = self.seq2seq(inp, False, ranks, o[0][:, :-1], cal_pw=True)
-                        # pred_pw = predict_para_att_ratio(pb, ranks)
-                        # diver_score = self.score_diversity(pred_pw, pw, ranks)
+                        _, pw, pb = self.seq2seq(inp, False, ranks, o[0][:, :-1], cal_pw=True)
+                        pred_pw = predict_para_att_ratio(pb, ranks)
+                        diver_score = self.score_diversity(pred_pw, pw, ranks)
 
                         o[1] /= int(o[0].shape[-1])
-                        # print(o[1], diver_score)
-                        # o[1] += diver_score
+                        o[1] += diver_score
 
                         final_out.append(o)
                         update_beam += 1
@@ -301,7 +292,7 @@ class RUN:
             abs1 = [int(i) for i in abs1]
             out_sen = self.sp.decode_ids(abs1)
 
-            with open('str_cov', 'a',encoding='utf8') as fw:
+            with open('b_0.8_f25_nd.txt', 'a',encoding='utf8') as fw:
                 fw.write(out_sen)
                 fw.write('\n')
 
@@ -508,7 +499,7 @@ class PreAtt(object):
 if __name__ == "__main__":
     args = parse_args()
     a = RUN()
-    a.eval_by_beam_search()
+    a.generate_pw()
 
     #b = PreAtt()
     #b.train()
