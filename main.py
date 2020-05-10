@@ -8,14 +8,15 @@ import time
 from data_process import generate_batch
 import sentencepiece as spm
 from nltk.util import ngrams
+import pandas as pd
 
 # tf.enable_eager_execution()
-#
-# gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
-# tf.config.experimental.set_virtual_device_configuration(
-#     gpus[0],
-#     [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1000)]
-# )
+'''
+gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
+tf.config.experimental.set_virtual_device_configuration(
+     gpus[0],
+     [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1000)])
+'''
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Run graph2vec based MDS tasks.')
@@ -162,9 +163,9 @@ class RUN:
             _, pw, _ = self.seq2seq(inp, False, ranks, tar_inp, tar_real, True)
             para_weights = np.concatenate((para_weights, pw.numpy()))
 
-            # if len(para_weights) >= 100:
-            #     break
-        np.savetxt('pre_att/pw1', para_weights)
+            if len(para_weights) >= 10002:
+                break
+        np.savetxt('pre_att/p_1d', para_weights)
 
     def score_diversity(self, pred_att_ratio, real_att, ranks, beta=0.8):
         real_att = real_att.numpy()[0, :]
@@ -176,7 +177,6 @@ class RUN:
             if real_att[i] == 0.0:
                 continue
             score += np.log(np.minimum(real_att[i], pred_att_ratio[i]))
-
 
         return beta * score
 
@@ -205,10 +205,10 @@ class RUN:
             final_out = []
             update_beam = 0
 
+            # compression
+            '''
             _, _, pb = self.seq2seq(inp, False, ranks, initial_dec_inp)
             pred_pw = predict_para_att_ratio(pb, ranks)
-
-            # compression
             count_zero = list(ranks[0,:]).count(0)
             fil_len = 25
             fil, fil_id = tf.nn.top_k(pred_pw, fil_len)
@@ -217,7 +217,7 @@ class RUN:
                 fil_id = fil_id[:-count_remove]
             inp = inp[:, fil_id, :]
             ranks = np.ones(shape=(1, len(fil_id)))
-
+            '''
             # generation
             for step in range(200):
                 temp = []
@@ -292,7 +292,7 @@ class RUN:
             abs1 = [int(i) for i in abs1]
             out_sen = self.sp.decode_ids(abs1)
 
-            with open('b_0.8_f25_nd.txt', 'a',encoding='utf8') as fw:
+            with open('b_0.8_n.txt', 'a',encoding='utf8') as fw:
                 fw.write(out_sen)
                 fw.write('\n')
 
@@ -366,7 +366,7 @@ class PreAtt(object):
         self.train_loss = tf.keras.metrics.Mean(name='train_loss')
         self.val_loss = tf.keras.metrics.Mean(name='val_loss')
 
-        checkpoint_path = './checkpoints2/3d_l'
+        checkpoint_path = './checkpoints2/3d_l_n3'
 
         ckpt = tf.train.Checkpoint(model=self.model,
                                    optimizer=self.optimizer)
@@ -413,13 +413,15 @@ class PreAtt(object):
 
     def train(self):
         seq2seq = self.seq2seq_model()
-        for epoch in range(30):
+        t_loss = []
+        v_loss = []
+        for epoch in range(2):
             start = time.time()
 
             self.train_loss.reset_states()
             self.val_loss.reset_states()
             print('start training')
-            batch_set = generate_batch(32)
+            batch_set = generate_batch(64)
             for (batch, batch_contents) in enumerate(batch_set):
                 inp, tar, ranks = batch_contents
                 tar_inp = tar[:, :-1]
@@ -430,33 +432,40 @@ class PreAtt(object):
 
                 self.train_step(pb, pw, ranks)
 
-                if batch % 50 == 0 :
+                if batch % 2000 == 0 and batch > 0:
                     print('Epoch {} Batch {} Loss {:.4f}'.format(
                         epoch + 1, batch, self.train_loss.result()))
 
-            ckpt_save_path = self.ckpt_manager.save()
-            print('Saving checkpoint for epoch {} at {}'.format(epoch + 1,
-                                                                ckpt_save_path))
+                    t_loss.append(float(self.train_loss.result()))
 
-            print('Epoch {} Loss {:.4f}'.format(epoch + 1, self.train_loss.result()))
-            print('\nstart validation')
-            val_batch = generate_batch(32, mode='valid')
-            for (b, bc) in enumerate(val_batch):
-                inp, tar, ranks = bc
-                tar_inp = tar[:, :-1]
-                tar_real = tar[:, 1:]
-                _, pw, pb = seq2seq(inp, False, ranks, tar_inp, tar_real, True)
+                    ckpt_save_path = self.ckpt_manager.save()
+                    print('Saving checkpoint for epoch {} at {}'.format(epoch + 1,
+                                                                        ckpt_save_path))
 
-                pw /= tf.reduce_sum(pw, axis=1, keepdims=True)
-                self.val_step(pb, pw, ranks)
+                    # print('Epoch {} Loss {:.4f}'.format(epoch + 1, self.train_loss.result()))
+                    print('\nstart validation')
+                    val_batch = generate_batch(64, mode='valid')
+                    for (b, bc) in enumerate(val_batch):
+                        inp, tar, ranks = bc
+                        tar_inp = tar[:, :-1]
+                        tar_real = tar[:, 1:]
+                        _, pw, pb = seq2seq(inp, False, ranks, tar_inp, tar_real, True)
 
-            print('Validation: Loss {:.4f}'.format(self.val_loss.result()))
+                        pw /= tf.reduce_sum(pw, axis=1, keepdims=True)
+                        self.val_step(pb, pw, ranks)
 
-            print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
+                    print('Validation: Loss {:.4f}'.format(self.val_loss.result()))
+                    v_loss.append(float(self.val_loss.result()))
+
+                    print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
+                    self.train_loss.reset_states()
+                    self.val_loss.reset_states()
+        pd.DataFrame({'t_loss':t_loss, 'v_loss':v_loss}).to_csv('att_pre1.csv')
 
     def valid(self):
         seq2seq = self.seq2seq_model()
-        val_batch = generate_batch(32, mode='valid')
+        self.val_loss.reset_states()
+        val_batch = generate_batch(64, mode='valid')
         for (b, bc) in enumerate(val_batch):
             inp, tar, ranks = bc
             tar_inp = tar[:, :-1]
@@ -498,8 +507,8 @@ class PreAtt(object):
 
 if __name__ == "__main__":
     args = parse_args()
-    a = RUN()
-    a.generate_pw()
+    a = PreAtt()
+    a.train()
 
     #b = PreAtt()
     #b.train()
