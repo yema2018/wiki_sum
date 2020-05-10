@@ -1,5 +1,6 @@
 We propose two Hierarchical Transformers for Multi-document summarization, namely Parallel HT and Vertical HT.
 
+
 Preparation
 -------
  You can find the best checkpoints from https://pan.baidu.com/s/18kZpVQuuPpDjcRoQ6D6YnQ, code: uzvc 
@@ -7,6 +8,7 @@ Preparation
  The ranked WikiSum dataset from https://github.com/nlpyang/hiersumm
  
  You should dowload above checkpoints and dataset and put them in your project.
+ 
  
  Traning
  -----
@@ -18,11 +20,13 @@ Preparation
     
    This is to train Vertical HT.
    
+   
 Validation
 ----
     python main.py --mode valid --model_mode p --ckpt_path ./checkpoints/train_large_p_3d_30
     
    Validation is to find the best checkpoint, You don't need to do this because we have uploaded the best ckeckpoints.
+   
    
  Generating
  ----
