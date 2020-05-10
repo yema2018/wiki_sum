@@ -8,15 +8,10 @@ sp = spm.SentencePieceProcessor()
 sp.load('spm9998_3.model')
 
 
-def generate_batch(batch_size, para_num=30, para_len=100, tgt_len=145, mode='train', nn_att=False, att_train=True):
+def generate_batch(batch_size, para_num=30, para_len=100, tgt_len=145, mode='train'):
     count = 0
     l = [i for i in os.listdir('ranked_wiki_b40') if mode in i]
-    if nn_att:
-        if att_train:
-            l = [i for i in os.listdir('ranked_wiki_b40') if 'train' in i][:-5]
-        else:
-            l = [i for i in os.listdir('ranked_wiki_b40') if 'train' in i][-5:]
-    # l.reverse()
+
     for i in l:
         print(i)
         da = torch.load('ranked_wiki_b40/{}'.format(i))

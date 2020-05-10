@@ -240,16 +240,7 @@ class MyModel(tf.keras.Model):
 
         vocab_dists = self.out_layer(decoder_out)  # (batch_size, target_seq_len, vocab_size)
 
-        return vocab_dists, pw, para_num
+        return vocab_dists, pw
 
 
-if __name__ == "__main__":
-    inp = tf.ones([32, 100, 256])
-    ranks = tf.ones([32, 100])
-    tar_inp = tf.ones([32, 512])
-    sp = tf.ones([32, 100])
-    encoded_sen_x = tf.ones([32, 100, 256])
-    model =MyModel(2, 256, 4, 1028, 30000, 40000, 100, 0.5)
-    a = model(inp, True, ranks, tar_inp,sp,encoded_sen_x)
-    print(a)
 

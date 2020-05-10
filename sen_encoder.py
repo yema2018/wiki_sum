@@ -297,7 +297,6 @@ class SenEncoder(tf.keras.layers.Layer):
         return contextual_words, para_emb
 
 
-
 if __name__ == '__main__':
     import os
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
